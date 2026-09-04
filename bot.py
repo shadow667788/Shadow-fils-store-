@@ -246,11 +246,12 @@ def user_refs(uid):
 
 def user_status(uid):
     if uid == OWNER_ID: return "Owner"
+    role = get_role(uid)
+    if role in {"admin", "partner"}: return {"admin": "Admin", "partner": "Partner"}[role]
     with db() as c:
         row = c.execute("SELECT premium FROM users WHERE id=?", (uid,)).fetchone()
     if row and row["premium"]: return "Premium User"
-    role = get_role(uid)
-    return {"admin": "Admin", "partner": "Partner"}.get(role, "Free User")
+    return "Free User"
 
 
 def is_premium(uid):
