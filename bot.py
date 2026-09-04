@@ -166,7 +166,7 @@ async def gate_or_prompt(update, context) -> bool:
         with db() as c:
             c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (uid,)); c.commit()
         return True
-    text = f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
+    text = f"Neeche tamam WhatsApp aur Telegram channels/groups join karein, phir Verify karein.\n\n{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=gate_keyboard())
     else:
