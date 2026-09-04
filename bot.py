@@ -21,6 +21,8 @@ from telegram.ext import (
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger("shadow-files")
+for noisy_logger in ("httpx", "httpcore", "telegram", "telegram.ext", "telegram.ext._application"):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
@@ -309,7 +311,7 @@ def gate_keyboard():
 async def check_gate(bot, uid: int):
     required_chats = list(CHANNELS) + list(GROUPS)
     if not required_chats: return True, None
-    for chat in required_chats:
+    async def check_one(chat):
         chat_id, _, display_name = chat_spec(chat)
         try:
             # Resolve public usernames first. This avoids false negatives caused by
@@ -319,10 +321,9 @@ async def check_gate(bot, uid: int):
             m = await bot.get_chat_member(canonical_id, uid)
             log.debug("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
             status = getattr(m.status, "value", str(m.status)).lower()
-            if status in {"creator", "administrator", "member"}:
-                continue
+            if status in {"creator", "administrator", "member"}: return True, None
             if status == "restricted" and getattr(m, "is_member", False):
-                continue
+                return True, None
             # Every other status—including left, kicked, unknown, or a
             # restricted member who is no longer joined—must fail the gate.
             if status not in {"creator", "administrator", "member", "restricted"} or status in {"left", "kicked", "restricted"}:
@@ -330,6 +331,9 @@ async def check_gate(bot, uid: int):
         except Exception as e:
             log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, repr(e))
             return False, display_name
+    results = await asyncio.gather(*(check_one(chat) for chat in required_chats))
+    for passed, failed_name in results:
+        if not passed: return False, failed_name
     return True, None
 
 
