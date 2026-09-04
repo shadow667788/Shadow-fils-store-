@@ -155,9 +155,10 @@ async def check_gate(bot, uid: int):
             canonical_id = resolved.id
             m = await bot.get_chat_member(canonical_id, uid)
             log.info("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
-            if m.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
+            status = getattr(m.status, "value", str(m.status)).lower()
+            if status in {"left", "kicked"}:
                 return False, display_name
-            if m.status == ChatMemberStatus.RESTRICTED and not getattr(m, "is_member", False):
+            if status == "restricted" and not getattr(m, "is_member", False):
                 return False, display_name
         except Exception as e:
             log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, repr(e))
