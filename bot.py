@@ -235,6 +235,12 @@ def is_premium(uid):
     return bool(row and row["premium"])
 
 
+def is_banned(uid):
+    with db() as c:
+        row = c.execute("SELECT banned FROM users WHERE id=?", (uid,)).fetchone()
+    return bool(row and row["banned"])
+
+
 def category_keyboard():
     items = categories()
     styles = ("success", "primary", "danger")
@@ -248,8 +254,8 @@ def category_keyboard():
 
 
 def dashboard_keyboard():
-    rows = [[KeyboardButton("Refer Link"), KeyboardButton("My Balance")], [KeyboardButton("My Account")]]
-    rows.append([KeyboardButton("Contact Owner to Buy Premium")])
+    rows = [[KeyboardButton("🔗 Refer Link"), KeyboardButton("💰 My Balance")], [KeyboardButton("👤 My Account")]]
+    rows.append([KeyboardButton("💎 Contact Owner to Buy Premium")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
@@ -328,6 +334,9 @@ def staff_menu(uid):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user; upsert_user(u)
+    if is_banned(u.id):
+        await update.effective_message.reply_text("Aapka bot access band hai.")
+        return
     # /start REFERRER_ID records only after successful gate verification.
     if context.args and context.args[0].isdigit() and int(context.args[0]) != u.id:
         context.user_data["pending_referrer"] = int(context.args[0])
@@ -405,23 +414,35 @@ async def panel_action(update, context):
         else:
             rows=[[button(f"📄 {x['name']}", callback_data=f"rmfile:{x['id']}")] for cat in categories() for x in files_for(cat['id'])]; await q.edit_message_text("Delete karne wali file:", reply_markup=InlineKeyboardMarkup(rows))
     elif action=="broadcast" and allowed(uid,"broadcast"): context.user_data["state"]=BROADCAST; await q.edit_message_text("Broadcast message bhejein:")
-    elif action in {"add_admin","remove_admin","partners","ban","stats","add_premium","remove_premium"}:
+    elif action == "partners" and uid == OWNER_ID:
+        await q.edit_message_text("Partner Management:", reply_markup=InlineKeyboardMarkup([[button("Add Partner", "success", callback_data="add_partner"), button("Remove Partner", "danger", callback_data="remove_partner")], [button("Back", callback_data="owner_back")]]))
+    elif action in {"add_partner","remove_partner"} and uid == OWNER_ID:
+        context.user_data["role_action"] = action; await q.edit_message_text("Partner user ka numeric Telegram ID bhejein:")
+    elif action == "ban" and uid == OWNER_ID:
+        await q.edit_message_text("User Management:", reply_markup=InlineKeyboardMarkup([[button("Ban User", "danger", callback_data="ban_user"), button("Unban User", "success", callback_data="unban_user")], [button("Back", callback_data="owner_back")]]))
+    elif action in {"ban_user","unban_user"} and uid == OWNER_ID:
+        context.user_data["ban_action"] = action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
+    elif action == "stats" and uid == OWNER_ID:
+        with db() as c:
+            u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; r=c.execute("SELECT COUNT(*) n FROM referrals").fetchone()["n"]; p=c.execute("SELECT COUNT(*) n FROM users WHERE premium=1").fetchone()["n"]
+        await q.edit_message_text(f"<b>Live Stats</b>\n\nUsers: {u}\nFiles: {f}\nReferrals: {r}\nPremium Users: {p}", parse_mode="HTML", reply_markup=staff_menu(uid))
+    elif action in {"add_admin","remove_admin","add_premium","remove_premium"}:
         if action in {"add_premium","remove_premium"} and allowed(uid,"premium_manage"):
             context.user_data["premium_action"] = action; await q.edit_message_text("Premium user ka numeric Telegram ID bhejein:")
         elif action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"): context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
-        elif action=="stats" and uid==OWNER_ID:
-            with db() as c: u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; await q.edit_message_text(f"{GOLD} Stats\nUsers: {u}\nFiles: {f}", reply_markup=staff_menu(uid))
         else: await q.edit_message_text(f"{RED} Ye option aapke role ke liye available nahi.", reply_markup=staff_menu(uid))
+    elif action == "owner_back":
+        await q.edit_message_text("Owner Panel", reply_markup=staff_menu(uid))
     else: await q.edit_message_text(f"{RED} Permission denied.", reply_markup=staff_menu(uid))
 
 async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
-    if state is None and text in {"Refer Link", "My Balance", "My Account", "Contact Owner to Buy Premium"}:
-        if text == "My Balance":
+    if state is None and text in {"🔗 Refer Link", "💰 My Balance", "👤 My Account", "💎 Contact Owner to Buy Premium"}:
+        if text == "💰 My Balance":
             await update.message.reply_text(f"<b>My Balance:</b> {user_refs(uid)} referrals", parse_mode="HTML"); return
-        if text == "My Account":
+        if text == "👤 My Account":
             await update.message.reply_text(f"<b>My Account</b>\n\n<b>Status:</b> {user_status(uid)}\n<b>User ID:</b> <code>{uid}</code>\n<b>Balance:</b> {user_refs(uid)}", parse_mode="HTML"); return
-        if text == "Contact Owner to Buy Premium":
+        if text == "💎 Contact Owner to Buy Premium":
             if OWNER_CONTACT_URL: await update.message.reply_text("Premium purchase ke liye owner se contact karein.", reply_markup=InlineKeyboardMarkup([[button("Contact Owner", "danger", url=OWNER_CONTACT_URL)]]))
             else: await update.message.reply_text("Owner contact abhi config.json mein set nahi hai.")
             return
@@ -447,18 +468,35 @@ async def text_handler(update, context):
         context.user_data.pop("state",None); await update.message.reply_text(f"{GREEN} Broadcast complete: {sent} users.", reply_markup=staff_menu(uid)); return
     if context.user_data.get("role_action"):
         if not text.isdigit(): await update.message.reply_text("Valid numeric user ID dein."); return
-        role_action=context.user_data.pop("role_action"); role="admin" if role_action=="add_admin" else "user"
+        role_action=context.user_data.pop("role_action")
+        role = "admin" if role_action == "add_admin" else "partner" if role_action == "add_partner" else "user"
         with db() as c:
-            if role_action=="add_admin": c.execute("INSERT INTO roles(user_id,role) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET role='admin'",(int(text),))
-            else: c.execute("DELETE FROM roles WHERE user_id=? AND role='admin'",(int(text),))
+            if role_action in {"add_admin", "add_partner"}: c.execute("INSERT INTO roles(user_id,role) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET role=?",(int(text), role))
+            else: c.execute("DELETE FROM roles WHERE user_id=? AND role=?",(int(text), "admin" if role_action == "remove_admin" else "partner"))
             c.commit()
-        await save_state_now(); await update.message.reply_text(f"{GREEN} Role update ho gaya.", reply_markup=staff_menu(uid)); return
+        await save_state_now()
+        notices = {"add_admin": "Aapko Admin bana diya gaya hai. Admin panel ke liye /admin command use karein.", "remove_admin": "Aapka Admin access remove kar diya gaya hai.", "add_partner": "Aapko Partner bana diya gaya hai. Partner panel ke liye /partner command use karein.", "remove_partner": "Aapka Partner access remove kar diya gaya hai."}
+        try: await context.bot.send_message(int(text), notices[role_action])
+        except Exception: pass
+        await update.message.reply_text(f"{GREEN} Role update ho gaya aur user ko notification bhej di gayi.", reply_markup=staff_menu(uid)); return
+    if context.user_data.get("ban_action"):
+        if not text.isdigit(): await update.message.reply_text("Valid numeric user ID dein."); return
+        action = context.user_data.pop("ban_action")
+        banned = 1 if action == "ban_user" else 0
+        with db() as c: c.execute("INSERT INTO users(id, username, first_name, banned) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET banned=?", (int(text), banned, banned)); c.commit()
+        await save_state_now()
+        try: await context.bot.send_message(int(text), "Aapka access ban kar diya gaya hai." if banned else "Aapka access restore kar diya gaya hai.")
+        except Exception: pass
+        await update.message.reply_text("User status update ho gaya.", reply_markup=staff_menu(uid)); return
     if context.user_data.get("premium_action"):
         if not text.isdigit(): await update.message.reply_text("Valid numeric user ID dein."); return
         action = context.user_data.pop("premium_action")
         with db() as c:
             c.execute("INSERT INTO users(id, username, first_name, premium) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET premium=?", (int(text), 1 if action == "add_premium" else 0, 1 if action == "add_premium" else 0)); c.commit()
-        await save_state_now(); await update.message.reply_text("Premium status update ho gaya.", reply_markup=staff_menu(uid)); return
+        await save_state_now()
+        try: await context.bot.send_message(int(text), "Aapko Premium User bana diya gaya hai. Ab aap referral ke baghair files access kar sakte hain." if action == "add_premium" else "Aapka Premium access remove kar diya gaya hai.")
+        except Exception: pass
+        await update.message.reply_text("Premium status update ho gaya aur user ko notification bhej di gayi.", reply_markup=staff_menu(uid)); return
     await update.message.reply_text("Menu se option select karein.", reply_markup=user_menu())
 
 async def callback_router(update, context):
