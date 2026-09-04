@@ -17,9 +17,17 @@ load_dotenv()
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 log = logging.getLogger("shadow-files")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-DB_PATH = os.getenv("DB_PATH", "shadow_files.db")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+try:
+    OWNER_ID = int(os.getenv("OWNER_ID", "0").strip() or "0")
+except ValueError:
+    OWNER_ID = 0
+
+
+DB_PATH = ":memory:"
+MEMORY_CONNECTION = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+MEMORY_CONNECTION.row_factory = sqlite3.Row
+MEMORY_CONNECTION.execute("PRAGMA foreign_keys = ON")
 WA_URL = os.getenv("WHATSAPP_CHANNEL_URL", "").strip()
 CHANNELS = [x.strip() for x in os.getenv("REQUIRED_CHANNELS", "").split(",") if x.strip()]
 GROUPS = [x.strip() for x in os.getenv("REQUIRED_GROUPS", "").split(",") if x.strip()]
@@ -35,14 +43,11 @@ GOLD = "🟡"
 
 
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return MEMORY_CONNECTION
 
 
 def init_db():
-    with closing(db()) as c:
+    with db() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, referrals INTEGER NOT NULL DEFAULT 0,
@@ -66,7 +71,7 @@ def init_db():
 
 
 def upsert_user(u):
-    with closing(db()) as c:
+    with db() as c:
         c.execute("INSERT INTO users(id, username, first_name) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, last_seen=CURRENT_TIMESTAMP", (u.id, u.username or "", u.first_name or ""))
         c.commit()
 
@@ -74,7 +79,7 @@ def upsert_user(u):
 def get_role(uid: int) -> str:
     if uid == OWNER_ID:
         return "owner"
-    with closing(db()) as c:
+    with db() as c:
         row = c.execute("SELECT role FROM roles WHERE user_id=?", (uid,)).fetchone()
         return row["role"] if row else "user"
 
@@ -87,13 +92,13 @@ def allowed(uid, action):
 
 
 def categories():
-    with closing(db()) as c: return c.execute("SELECT * FROM categories ORDER BY id DESC").fetchall()
+    with db() as c: return c.execute("SELECT * FROM categories ORDER BY id DESC").fetchall()
 
 def files_for(cid):
-    with closing(db()) as c: return c.execute("SELECT * FROM files WHERE category_id=? ORDER BY id DESC", (cid,)).fetchall()
+    with db() as c: return c.execute("SELECT * FROM files WHERE category_id=? ORDER BY id DESC", (cid,)).fetchall()
 
 def user_refs(uid):
-    with closing(db()) as c: return c.execute("SELECT referrals FROM users WHERE id=?", (uid,)).fetchone()["referrals"]
+    with db() as c: return c.execute("SELECT referrals FROM users WHERE id=?", (uid,)).fetchone()["referrals"]
 
 
 def gate_keyboard():
@@ -122,7 +127,7 @@ async def check_gate(bot, uid: int) -> bool:
 async def gate_or_prompt(update, context) -> bool:
     uid = update.effective_user.id
     if await check_gate(context.bot, uid):
-        with closing(db()) as c:
+        with db() as c:
             c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (uid,)); c.commit()
         return True
     text = f"{RED} Access band hai. Pehle dono Telegram channels aur dono groups join karein, phir Verify dabayein.\n\nWhatsApp link optional hai."
@@ -153,7 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await gate_or_prompt(update, context): return
     ref = context.user_data.pop("pending_referrer", None)
     if ref:
-        with closing(db()) as c:
+        with db() as c:
             exists = c.execute("SELECT 1 FROM referrals WHERE invitee_id=?", (u.id,)).fetchone()
             if not exists and c.execute("SELECT 1 FROM users WHERE id=?", (ref,)).fetchone():
                 c.execute("INSERT INTO referrals(inviter_id, invitee_id) VALUES(?,?)", (ref, u.id)); c.execute("UPDATE users SET referrals=referrals+1 WHERE id=?", (ref,)); c.commit()
@@ -164,7 +169,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def verify(update, context):
     q = update.callback_query; await q.answer()
     if await check_gate(context.bot, q.from_user.id):
-        with closing(db()) as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
+        with db() as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
         await q.edit_message_text(f"{GREEN} Verification successful! Welcome.", reply_markup=user_menu())
     else: await q.edit_message_text(f"{RED} Kuch channels/groups abhi join nahi hue. Join karke dobara verify karein.", reply_markup=gate_keyboard())
 
@@ -191,7 +196,7 @@ async def show_files(update, context):
 
 async def show_file(update, context):
     q=update.callback_query; await q.answer(); fid=int(q.data.split(":")[1]); uid=q.from_user.id
-    with closing(db()) as c:
+    with db() as c:
         f=c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone(); bought=c.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_id=?", (uid,fid)).fetchone()
     if not f: return
     if bought or user_refs(uid) >= f["required_refs"]:
@@ -217,17 +222,17 @@ async def panel_action(update, context):
     elif action in {"add_admin","remove_admin","partners","ban","stats"}:
         if action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"): context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
         elif action=="stats" and uid==OWNER_ID:
-            with closing(db()) as c: u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; await q.edit_message_text(f"{GOLD} Stats\nUsers: {u}\nFiles: {f}", reply_markup=staff_menu(uid))
+            with db() as c: u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; await q.edit_message_text(f"{GOLD} Stats\nUsers: {u}\nFiles: {f}", reply_markup=staff_menu(uid))
         else: await q.edit_message_text(f"{RED} Ye option aapke role ke liye available nahi.", reply_markup=staff_menu(uid))
     else: await q.edit_message_text(f"{RED} Permission denied.", reply_markup=staff_menu(uid))
 
 async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
     if state==ADD_CATEGORY:
-        with closing(db()) as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)",(text,uid)); c.commit()
+        with db() as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)",(text,uid)); c.commit()
         context.user_data.pop("state",None); await update.message.reply_text(f"{GREEN} Category add ho gayi.", reply_markup=staff_menu(uid)); return
     if state==BROADCAST:
-        with closing(db()) as c: users=c.execute("SELECT id FROM users WHERE banned=0").fetchall()
+        with db() as c: users=c.execute("SELECT id FROM users WHERE banned=0").fetchall()
         sent=0
         for u in users:
             try: await context.bot.send_message(u["id"], text); sent+=1
@@ -236,7 +241,7 @@ async def text_handler(update, context):
     if context.user_data.get("role_action"):
         if not text.isdigit(): await update.message.reply_text("Valid numeric user ID dein."); return
         role_action=context.user_data.pop("role_action"); role="admin" if role_action=="add_admin" else "user"
-        with closing(db()) as c:
+        with db() as c:
             if role_action=="add_admin": c.execute("INSERT INTO roles(user_id,role) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET role='admin'",(int(text),))
             else: c.execute("DELETE FROM roles WHERE user_id=? AND role='admin'",(int(text),))
             c.commit()
@@ -253,7 +258,7 @@ async def callback_router(update, context):
     if data=="refer": return await refer(update,context)
     if data.startswith("buy:"):
         fid=int(data.split(":")[1]); uid=q.from_user.id
-        with closing(db()) as c:
+        with db() as c:
             f=c.execute("SELECT * FROM files WHERE id=?",(fid,)).fetchone()
             if user_refs(uid)<f["required_refs"]: await q.answer("Referrals kam hain",show_alert=True); return
             c.execute("INSERT OR IGNORE INTO purchases(user_id,file_id) VALUES(?,?)",(uid,fid)); c.commit()
@@ -262,10 +267,10 @@ async def callback_router(update, context):
         context.user_data["file_category"]=int(data.split(":")[1]); context.user_data["state"]=SET_FILE_NAME; await q.edit_message_text("Ab file upload karein (document):")
         return
     if data.startswith("rmcat:"):
-        with closing(db()) as c: c.execute("DELETE FROM categories WHERE id=?",(int(data.split(":")[1]),)); c.commit()
+        with db() as c: c.execute("DELETE FROM categories WHERE id=?",(int(data.split(":")[1]),)); c.commit()
         await q.edit_message_text(f"{GREEN} Category remove ho gayi.",reply_markup=staff_menu(q.from_user.id)); return
     if data.startswith("rmfile:"):
-        with closing(db()) as c: c.execute("DELETE FROM files WHERE id=?",(int(data.split(":")[1]),)); c.commit()
+        with db() as c: c.execute("DELETE FROM files WHERE id=?",(int(data.split(":")[1]),)); c.commit()
         await q.edit_message_text(f"{GREEN} File delete ho gayi.",reply_markup=staff_menu(q.from_user.id)); return
     return await panel_action(update,context)
 
@@ -282,7 +287,7 @@ async def refs_handler(update, context):
     try: refs=int(update.message.text.strip()); assert refs>=0
     except Exception: await update.message.reply_text("Sirf positive number bhejein."); return
     fid,typ=context.user_data["upload"]; name=context.user_data["file_name"]; cid=context.user_data["file_category"]; uid=update.effective_user.id
-    with closing(db()) as c:
+    with db() as c:
         c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,created_by) VALUES(?,?,?,?,?,?)",(cid,name,fid,typ,refs,uid)); c.commit()
         users=c.execute("SELECT id FROM users WHERE banned=0").fetchall()
     for user in users:

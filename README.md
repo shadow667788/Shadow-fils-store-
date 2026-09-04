@@ -1,6 +1,6 @@
 # Shadow Files Store — Python Telegram Bot
 
-Yeh project Python aur `python-telegram-bot` par based button-driven file store hai. Is mein SQLite database use hota hai, is liye chhote ya medium bot ke liye seedha chal sakta hai.
+Yeh project Python aur `python-telegram-bot` par based button-driven file store hai. Filhaal data **RAM-only in-memory storage** mein rakha jata hai; koi database file create nahi hoti.
 
 ## Important Telegram limitation
 
@@ -16,7 +16,7 @@ Telegram Bot API inline buttons ka background color bot se set nahi karne deta. 
 - Partner: category add/remove, file upload/delete, broadcast aur admins add/remove.
 - Unique referral links; referral tab count hota hai jab invitee 4 Telegram communities join karke verify karta hai.
 - Required referral points par file unlock aur Telegram document delivery.
-- SQLite persistence, banned users ko broadcast se exclude karna.
+- Temporary in-memory storage, banned users ko broadcast se exclude karna.
 - New file add hone par users ko automatic notification.
 
 ## Setup
@@ -60,6 +60,10 @@ Normal users ko protected commands par permission-denied message milta hai.
 
 Owner/admin/partner panel mein `Add File` dabayein, category choose karein, Telegram document upload karein, display name bhejein aur required referrals ka number bhejein. File database mein save hoti hai, users ko notification jati hai, aur eligible user purchase button se document receive karta hai.
 
+## Railway deployment
+
+Railway variables mein `BOT_TOKEN`, `OWNER_ID`, `REQUIRED_CHANNELS` aur `REQUIRED_GROUPS` set karein. Bot ab `sqlite3` ki koi file open/create nahi karta, is liye `unable to open database file` startup error nahi aayega. Railway restart/redeploy hone par users, categories, files aur roles reset ho jayenge. Aap jab database details denge to persistent storage dobara add ki ja sakti hai.
+
 ## Production run
 
 Bot ko 24/7 chalane ke liye VPS, Docker, systemd, ya kisi persistent Python host par run karein. Long polling ke liye ek waqt mein sirf ek bot process chalna chahiye. Token ko kabhi GitHub par commit na karein.
@@ -69,4 +73,4 @@ Bot ko 24/7 chalane ke liye VPS, Docker, systemd, ya kisi persistent Python host
 1. Owner-only partner add/remove aur full ban/unban workflows ko production policy ke mutabiq enable karein.
 2. Broadcast rate limiting aur retry queue add karein.
 3. Files ko Telegram `file_id` ke saath optional cloud backup mein replicate karein.
-4. SQLite se PostgreSQL par migrate karein agar users/files ka volume bara ho.
+4. Database decide hone ke baad in-memory storage ko persistent database se replace karein.
