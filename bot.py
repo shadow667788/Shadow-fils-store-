@@ -306,8 +306,9 @@ def gate_keyboard():
     return InlineKeyboardMarkup(rows)
 
 async def check_gate(bot, uid: int):
-    if not CHANNELS and not GROUPS: return True, None
-    for chat in CHANNELS + GROUPS:
+    required_chats = list(CHANNELS) + list(GROUPS)
+    if not required_chats: return True, None
+    for chat in required_chats:
         chat_id, _, display_name = chat_spec(chat)
         try:
             # Resolve public usernames first. This avoids false negatives caused by
@@ -317,9 +318,13 @@ async def check_gate(bot, uid: int):
             m = await bot.get_chat_member(canonical_id, uid)
             log.info("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
             status = getattr(m.status, "value", str(m.status)).lower()
-            if status in {"left", "kicked"}:
-                return False, display_name
-            if status == "restricted" and not getattr(m, "is_member", False):
+            if status in {"creator", "administrator", "member"}:
+                continue
+            if status == "restricted" and getattr(m, "is_member", False):
+                continue
+            # Every other status—including left, kicked, unknown, or a
+            # restricted member who is no longer joined—must fail the gate.
+            if status not in {"creator", "administrator", "member", "restricted"} or status in {"left", "kicked", "restricted"}:
                 return False, display_name
         except Exception as e:
             log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, repr(e))
