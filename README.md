@@ -19,11 +19,7 @@ Bot settings `config.json` se load hoti hain. Is file mein do channels, **do Tel
     {"type": "group", "name": "Group 1", "chat_id": "@group_one", "join_url": "https://t.me/group_one"},
     {"type": "group", "name": "Group 2", "chat_id": "@group_two", "join_url": "https://t.me/group_two"}
   ],
-  "github": {
-    "repo": "owner/repository",
-    "token": "github_pat_token",
-    "state_file": "bot_state.json"
-  }
+  "github": {"repo": "owner/repository", "token": "", "state_file": "bot_state.json"}
 }
 ```
 
@@ -43,7 +39,7 @@ Owner, admin aur partner panel mein `Add Premium` aur `Remove Premium` buttons h
 
 ## GitHub state backup
 
-Agar `github.repo` aur `github.token` configure hon to bot startup par `bot_state.json` restore karta hai aur har 30 seconds GitHub contents API par current state upload karta hai. Token ko public repository mein commit karna security risk hai; private repository aur fine-grained token with only Contents read/write use karein. Token blank ho to bot RAM-only mode mein chalega.
+Agar `github.repo` configure ho aur deployment environment mein `GITHUB_TOKEN` set ho to bot startup par `bot_state.json` restore karta hai aur har 30 seconds GitHub Contents API par current state upload karta hai. `GITHUB_TOKEN` ko config ya public repository mein commit nahi karna; Railway Variables/Secrets mein set karein. Token ko fine-grained rakhein aur target repository ke liye sirf Contents read/write permission dein. Sync fail hone par owner ko error message milta hai.
 
 ## Run
 
