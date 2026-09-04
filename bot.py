@@ -1,11 +1,11 @@
 import logging
+import json
 import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatMemberStatus
 from telegram.ext import (
@@ -13,24 +13,25 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters,
 )
 
-load_dotenv()
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 log = logging.getLogger("shadow-files")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-try:
-    OWNER_ID = int(os.getenv("OWNER_ID", "0").strip() or "0")
-except ValueError:
-    OWNER_ID = 0
+CONFIG_PATH = Path(__file__).with_name("config.js")
+with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+    CONFIG = json.load(config_file)
+
+BOT_TOKEN = str(CONFIG.get("bot_token", "")).strip()
+OWNER_ID = int(CONFIG.get("owner_id", 0) or 0)
 
 
 DB_PATH = ":memory:"
 MEMORY_CONNECTION = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
 MEMORY_CONNECTION.row_factory = sqlite3.Row
 MEMORY_CONNECTION.execute("PRAGMA foreign_keys = ON")
-WA_URL = os.getenv("WHATSAPP_CHANNEL_URL", "").strip()
-CHANNELS = [x.strip() for x in os.getenv("REQUIRED_CHANNELS", "").split(",") if x.strip()]
-GROUPS = [x.strip() for x in os.getenv("REQUIRED_GROUPS", "").split(",") if x.strip()]
+WA_URL = str(CONFIG.get("whatsapp_channel", {}).get("url", "")).strip()
+REQUIRED = CONFIG.get("required", [])
+CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
+GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
 
 ADD_CATEGORY, ADD_FILE, SET_FILE_NAME, SET_FILE_REFS, BROADCAST = range(5)
 
@@ -59,13 +60,15 @@ def button(text, style=None, callback_data=None, url=None):
 
 def chat_spec(value):
     """Allow CHAT_ID or CHAT_ID|INVITE_URL in environment variables."""
+    if isinstance(value, dict):
+        return value.get("chat_id", "").strip(), value.get("join_url"), value.get("name", value.get("chat_id", ""))
     parts = value.split("|", 1)
     chat_id = parts[0].strip()
     if chat_id.startswith("https://t.me/") and "/+" not in chat_id:
         chat_id = "@" + chat_id.rstrip("/").split("/")[-1]
     if chat_id and not chat_id.startswith("@") and not chat_id.startswith("-") and not chat_id.startswith("http"):
         chat_id = f"@{chat_id}"
-    return chat_id, parts[1].strip() if len(parts) == 2 else None
+    return chat_id, parts[1].strip() if len(parts) == 2 else None, chat_id
 
 
 def db():
@@ -131,7 +134,7 @@ def gate_keyboard():
     rows = []
     styles = ("success", "primary", "danger")
     for i, chat in enumerate(CHANNELS + GROUPS):
-        chat_id, invite = chat_spec(chat)
+        chat_id, invite, display_name = chat_spec(chat)
         label = f"{BLUE} Join Telegram {'Channel' if i < len(CHANNELS) else 'Group'} {i + 1}"
         link = invite or (chat_id if chat_id.startswith("http") else f"https://t.me/{chat_id.lstrip('@')}")
         rows.append([button(label, styles[i % len(styles)], url=link)])
@@ -141,28 +144,29 @@ def gate_keyboard():
     rows.append([button(f"{GREEN} Verify Telegram Membership", verify_style, callback_data="verify_gate")])
     return InlineKeyboardMarkup(rows)
 
-async def check_gate(bot, uid: int) -> bool:
-    if not CHANNELS and not GROUPS: return True
+async def check_gate(bot, uid: int):
+    if not CHANNELS and not GROUPS: return True, None
     for chat in CHANNELS + GROUPS:
-        chat_id, _ = chat_spec(chat)
+        chat_id, _, display_name = chat_spec(chat)
         try:
             m = await bot.get_chat_member(chat_id, uid)
             if m.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
-                return False
+                return False, display_name
             if m.status == ChatMemberStatus.RESTRICTED and not getattr(m, "is_member", False):
-                return False
+                return False, display_name
         except Exception as e:
             log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, repr(e))
-            return False
-    return True
+            return False, display_name
+    return True, None
 
 async def gate_or_prompt(update, context) -> bool:
     uid = update.effective_user.id
-    if await check_gate(context.bot, uid):
+    passed, failed_name = await check_gate(context.bot, uid)
+    if passed:
         with db() as c:
             c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (uid,)); c.commit()
         return True
-    text = f"{RED} Access band hai. Neeche diye gaye tamam Telegram channels, groups aur WhatsApp channel join karein, phir Verify Telegram Membership dabayein.\n\nWhatsApp channel join karna required hai, lekin WhatsApp membership automatically check nahi hoti."
+    text = f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=gate_keyboard())
     else:
@@ -200,10 +204,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def verify(update, context):
     q = update.callback_query; await q.answer()
-    if await check_gate(context.bot, q.from_user.id):
+    passed, failed_name = await check_gate(context.bot, q.from_user.id)
+    if passed:
         with db() as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
         await q.edit_message_text(f"{GREEN} Verification successful! Welcome.", reply_markup=user_menu())
-    else: await q.edit_message_text(f"{RED} Telegram ke neeche diye gaye tamam channels aur groups join karein. Bot ko un sab mein admin hona chahiye. Agar join kar chuke hain to 10 seconds baad dobara Verify Telegram Membership dabayein.\n\nWhatsApp channel required hai, lekin uski membership check nahi hoti.", reply_markup=gate_keyboard())
+    else: await q.edit_message_text(f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein.", reply_markup=gate_keyboard())
 
 async def commands(update, context):
     uid = update.effective_user.id
