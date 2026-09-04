@@ -2,6 +2,7 @@ import logging
 import json
 import base64
 import asyncio
+import time
 import os
 import sqlite3
 import urllib.request
@@ -86,6 +87,9 @@ def db():
 
 STATE_TABLES = ("users", "roles", "categories", "files", "purchases", "referrals")
 LAST_SYNC_ERROR = None
+SYNC_PAUSED_UNTIL = 0.0
+SYNC_FAILURE_NOTIFIED = False
+SYNC_COOLDOWN_SECONDS = 3600
 
 
 def state_payload():
@@ -144,23 +148,40 @@ def github_state_restore():
 
 
 async def periodic_state_sync(context):
-    global LAST_SYNC_ERROR
+    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED
+    if time.time() < SYNC_PAUSED_UNTIL:
+        if LAST_SYNC_ERROR and not SYNC_FAILURE_NOTIFIED:
+            try:
+                await context.bot.send_message(OWNER_ID, f"GitHub data upload fail ho gaya.\n\nReason: {LAST_SYNC_ERROR}\n\nSafety cooldown 1 hour ke liye active hai. Is duration mein uploads pause rahenge; cooldown ke baad bot automatically retry karega.")
+                SYNC_FAILURE_NOTIFIED = True
+            except Exception: pass
+        return
     try:
         await asyncio.to_thread(github_state_sync)
+        if LAST_SYNC_ERROR:
+            try: await context.bot.send_message(OWNER_ID, "GitHub data upload successfully restore ho gaya. Cooldown ke baad pending data upload ho chuka hai.")
+            except Exception: pass
         LAST_SYNC_ERROR = None
+        SYNC_PAUSED_UNTIL = 0.0
+        SYNC_FAILURE_NOTIFIED = False
     except Exception as exc:
         reason = str(exc)
         log.warning("GitHub state sync failed: %s", reason)
-        if reason != LAST_SYNC_ERROR:
-            LAST_SYNC_ERROR = reason
-            try: await context.bot.send_message(OWNER_ID, f"GitHub data upload failed.\n\nReason: {reason}\n\nBot state abhi local memory mein hai; next sync par dobara try hoga.")
-            except Exception: pass
+        LAST_SYNC_ERROR = reason
+        SYNC_PAUSED_UNTIL = time.time() + SYNC_COOLDOWN_SECONDS
+        SYNC_FAILURE_NOTIFIED = False
 
 
 async def save_state_now():
+    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED
     if GITHUB_TOKEN and GITHUB_CONFIG.get("repo"):
+        if time.time() < SYNC_PAUSED_UNTIL: return
         try: await asyncio.to_thread(github_state_sync)
-        except Exception as exc: log.warning("Immediate GitHub state sync failed: %s", exc)
+        except Exception as exc:
+            LAST_SYNC_ERROR = str(exc)
+            SYNC_PAUSED_UNTIL = time.time() + SYNC_COOLDOWN_SECONDS
+            SYNC_FAILURE_NOTIFIED = False
+            log.warning("Immediate GitHub state sync failed; cooldown enabled: %s", exc)
 
 
 def init_db():
