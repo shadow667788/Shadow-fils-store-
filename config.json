@@ -5,8 +5,8 @@
     "name": "SHADOW OFFICIAL channel",
     "url": "https://whatsapp.com/channel/0029Vb8rXu8GufIzCWxRZB02"
   },
-  "banner_url": "",
-  "owner_contact_url": "",
+  "banner_url": "https://i.postimg.cc/CLZDcXhb/banner.png",
+  "owner_contact_url": "https://t.me/your_father_is_back",
   "github": {
     "repo": "shadow667788/Shadow-fils-store-",
     "token": "",
@@ -33,9 +33,9 @@
     },
     {
       "type": "group",
-      "name": "SECOND TELEGRAM GROUP",
-      "chat_id": "@your_second_group",
-      "join_url": "https://t.me/your_second_group"
+      "name": "SKXWAJI BUG GROUP",
+      "chat_id": "@skxwajibug",
+      "join_url": "https://t.me/skxwajibug"
     }
   ]
 }
