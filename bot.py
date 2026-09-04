@@ -236,7 +236,15 @@ def is_premium(uid):
 
 
 def category_keyboard():
-    return InlineKeyboardMarkup([[button(x["name"], callback_data=f"cat:{x['id']}")] for x in categories()])
+    items = categories()
+    styles = ("success", "primary", "danger")
+    rows = []
+    for index in range(0, len(items), 2):
+        row = []
+        for offset, item in enumerate(items[index:index + 2]):
+            row.append(button(item["name"], styles[(index + offset) % len(styles)], callback_data=f"cat:{item['id']}"))
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
 
 
 def dashboard_keyboard():
@@ -470,8 +478,13 @@ async def callback_router(update, context):
         fid=int(data.split(":")[1]); uid=q.from_user.id
         with db() as c:
             f=c.execute("SELECT * FROM files WHERE id=?",(fid,)).fetchone()
-            if not is_premium(uid) and user_refs(uid)<f["required_refs"]: await q.answer("Referrals kam hain",show_alert=True); return
-            c.execute("INSERT OR IGNORE INTO purchases(user_id,file_id) VALUES(?,?)",(uid,fid)); c.commit()
+            premium = is_premium(uid)
+            balance = c.execute("SELECT referrals FROM users WHERE id=?", (uid,)).fetchone()["referrals"]
+            if not premium and balance < f["required_refs"]: await q.answer("Referrals kam hain",show_alert=True); return
+            cursor = c.execute("INSERT OR IGNORE INTO purchases(user_id,file_id) VALUES(?,?)",(uid,fid))
+            if cursor.rowcount and not premium and f["required_refs"]:
+                c.execute("UPDATE users SET referrals=referrals-? WHERE id=?", (f["required_refs"], uid))
+            c.commit()
         await save_state_now()
         await q.answer("File unlock ho gayi!"); await context.bot.send_document(uid, f["file_id"], caption=f"{GREEN} {f['name']}"); return
     if data.startswith("newfilecat:"):
