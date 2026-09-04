@@ -15,7 +15,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 from telegram.constants import ChatMemberStatus
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-    ConversationHandler, MessageHandler, filters,
+    ConversationHandler, MessageHandler, TypeHandler, ApplicationHandlerStop, filters,
 )
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
@@ -331,6 +331,27 @@ async def check_gate(bot, uid: int):
             return False, display_name
     return True, None
 
+
+async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Re-check all required communities before every user interaction."""
+    user = update.effective_user
+    if not user:
+        return
+    query = update.callback_query
+    # Users must be able to press Verify after joining again.
+    if query and query.data == "verify_gate":
+        return
+    passed, failed_name = await check_gate(context.bot, user.id)
+    if passed:
+        return
+    message = f"Aapka access block hai. Aap ne **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
+    if query:
+        await query.answer("Membership incomplete", show_alert=True)
+        await query.edit_message_text(message, reply_markup=gate_keyboard())
+    elif update.effective_message:
+        await update.effective_message.reply_text(message, reply_markup=gate_keyboard())
+    raise ApplicationHandlerStop
+
 async def gate_or_prompt(update, context) -> bool:
     uid = update.effective_user.id
     passed, failed_name = await check_gate(context.bot, uid)
@@ -626,6 +647,7 @@ def main():
         raise RuntimeError("github.repo aur GITHUB_TOKEN environment variable required hain.")
     init_db(); github_state_restore(); app=Application.builder().token(BOT_TOKEN).build()
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
+    app.add_handler(TypeHandler(Update, global_membership_guard), group=-1)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.Document.ALL,document_handler))
