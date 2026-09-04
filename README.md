@@ -1,32 +1,49 @@
 # Shadow Files Store
 
-Python Telegram bot with user, owner, admin and partner panels, referrals, file unlocking and temporary RAM-only storage. No database file is created.
+Python Telegram bot with owner, admin, partner and user panels, direct category dashboard, referrals, premium users and temporary in-memory runtime storage.
 
-## Configuration
+## config.json
 
-Bot settings ab `.env` ya Railway variables se nahi, **`config.js`** se li jati hain. Is file mein apna token, owner ID, do channels, ek group aur WhatsApp link set karein:
+Bot settings `config.json` se load hoti hain. Is file mein do channels, **do Telegram groups**, WhatsApp link, banner URL, owner contact URL aur optional GitHub state backup configure karein.
 
 ```json
 {
   "bot_token": "BOTFATHER_TOKEN",
   "owner_id": 123456789,
-  "whatsapp_channel": {
-    "name": "WhatsApp Channel",
-    "url": "https://wa.me/channel/your_link"
-  },
+  "banner_url": "https://example.com/banner.jpg",
+  "owner_contact_url": "https://t.me/owner_username",
+  "whatsapp_channel": {"name": "WhatsApp Channel", "url": "https://whatsapp.com/channel/link"},
   "required": [
     {"type": "channel", "name": "Channel 1", "chat_id": "@channel_one", "join_url": "https://t.me/channel_one"},
     {"type": "channel", "name": "Channel 2", "chat_id": "@channel_two", "join_url": "https://t.me/channel_two"},
-    {"type": "group", "name": "Main Group", "chat_id": "@main_group", "join_url": "https://t.me/main_group"}
-  ]
+    {"type": "group", "name": "Group 1", "chat_id": "@group_one", "join_url": "https://t.me/group_one"},
+    {"type": "group", "name": "Group 2", "chat_id": "@group_two", "join_url": "https://t.me/group_two"}
+  ],
+  "github": {
+    "repo": "owner/repository",
+    "token": "github_pat_token",
+    "state_file": "bot_state.json"
+  }
 }
 ```
 
-`chat_id` mein public username `@channelname` ke saath likhein. Bot ko dono channels aur ek group mein administrator bana kar member lookup ki permission dein.
+`banner_url` khali ho to welcome photo nahi bheji jayegi. `owner_contact_url` khali ho to premium contact button alert show karega.
 
-## Membership flow
+## New user dashboard
 
-User ko neeche diye gaye tamam WhatsApp aur Telegram channels/groups join karne honge. WhatsApp link display hota hai lekin uski membership API se check nahi hoti. Telegram verification mein bot har configured Telegram chat ko check karta hai. Agar koi chat fail ho to user ko us chat ka exact configured `name` dikhaya jata hai.
+Verification ke baad banner ke saath bold welcome message, user status, referral balance, config ki tamam categories, `Refer Link`, `My Balance`, `My Account` aur `Contact Owner to Buy Premium` buttons show hote hain.
+
+## Premium users
+
+Owner, admin aur partner panel mein `Add Premium` aur `Remove Premium` buttons hain. Premium user required referrals ke baghair tamam files receive kar sakta hai.
+
+## Add File flow
+
+`Add File` par categories ke neeche `Add a new category` button hai. Is button se category banakar foran usi flow mein file upload ki ja sakti hai.
+
+## GitHub state backup
+
+Agar `github.repo` aur `github.token` configure hon to bot startup par `bot_state.json` restore karta hai aur har 30 seconds GitHub contents API par current state upload karta hai. Token ko public repository mein commit karna security risk hai; private repository aur fine-grained token with only Contents read/write use karein. Token blank ho to bot RAM-only mode mein chalega.
 
 ## Run
 
@@ -35,12 +52,4 @@ python3 -m pip install -r requirements.txt
 python bot.py
 ```
 
-`config.js` ko kabhi public repository mein real token ke saath commit na karein. Is repository mein placeholder config rakhein aur deployment platform par secret-safe file/config method use karein.
-
-## Button styles
-
-Latest `python-telegram-bot` 22.7 use hota hai. Telegram-native styles `success` (green), `primary` (blue) aur `danger` (red) use kiye gaye hain. Join buttons green, blue, red sequence mein cycle karte hain.
-
-## Temporary storage
-
-Data sirf process memory mein hai. Restart ya redeploy ke baad users, roles, categories, files aur referrals reset ho jayenge. Persistent database baad mein add ki ja sakti hai.
+Telegram bot ko dono channels aur dono groups mein administrator bana kar member lookup permission dein. Latest button styles ke liye `python-telegram-bot 22.7` required hai.

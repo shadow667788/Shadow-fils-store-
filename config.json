@@ -5,6 +5,13 @@
     "name": "SHADOW OFFICIAL channel",
     "url": "https://whatsapp.com/channel/0029Vb8rXu8GufIzCWxRZB02"
   },
+  "banner_url": "",
+  "owner_contact_url": "",
+  "github": {
+    "repo": "shadow667788/Shadow-fils-store-",
+    "token": "",
+    "state_file": "bot_state.json"
+  },
   "required": [
     {
       "type": "channel",
@@ -23,6 +30,12 @@
       "name": "SHADOW IS BACK",
       "chat_id": "@shadow_is_bacc",
       "join_url": "https://t.me/shadow_is_bacc"
+    },
+    {
+      "type": "group",
+      "name": "SECOND TELEGRAM GROUP",
+      "chat_id": "@your_second_group",
+      "join_url": "https://t.me/your_second_group"
     }
   ]
 }

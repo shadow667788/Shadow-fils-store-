@@ -1,7 +1,11 @@
 import logging
 import json
+import base64
+import asyncio
 import os
 import sqlite3
+import urllib.request
+import urllib.error
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
@@ -16,7 +20,7 @@ from telegram.ext import (
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 log = logging.getLogger("shadow-files")
 
-CONFIG_PATH = Path(__file__).with_name("config.js")
+CONFIG_PATH = Path(__file__).with_name("config.json")
 with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
     CONFIG = json.load(config_file)
 
@@ -29,6 +33,10 @@ MEMORY_CONNECTION = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30
 MEMORY_CONNECTION.row_factory = sqlite3.Row
 MEMORY_CONNECTION.execute("PRAGMA foreign_keys = ON")
 WA_URL = str(CONFIG.get("whatsapp_channel", {}).get("url", "")).strip()
+WA_NAME = str(CONFIG.get("whatsapp_channel", {}).get("name", "WhatsApp Channel"))
+BANNER_URL = str(CONFIG.get("banner_url", "")).strip()
+OWNER_CONTACT_URL = str(CONFIG.get("owner_contact_url", "")).strip()
+GITHUB_CONFIG = CONFIG.get("github", {})
 REQUIRED = CONFIG.get("required", [])
 CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
 GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
@@ -75,12 +83,81 @@ def db():
     return MEMORY_CONNECTION
 
 
+STATE_TABLES = ("users", "roles", "categories", "files", "purchases", "referrals")
+
+
+def state_payload():
+    payload = {}
+    with db() as c:
+        for table in STATE_TABLES:
+            rows = c.execute(f"SELECT * FROM {table}").fetchall()
+            payload[table] = [dict(row) for row in rows]
+    return payload
+
+
+def github_request(method, url, token, data=None):
+    body = json.dumps(data).encode() if data is not None else None
+    req = urllib.request.Request(url, data=body, method=method, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        return json.loads(response.read().decode())
+
+
+def github_state_sync():
+    token = str(GITHUB_CONFIG.get("token", "")).strip()
+    repo = str(GITHUB_CONFIG.get("repo", "")).strip()
+    state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
+    if not token or not repo: return
+    api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
+    encoded = base64.b64encode(json.dumps(state_payload(), ensure_ascii=False).encode()).decode()
+    current = None
+    try: current = github_request("GET", api, token)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404: raise
+    body = {"message": "Update bot state", "content": encoded}
+    if current and current.get("sha"): body["sha"] = current["sha"]
+    github_request("PUT", api, token, body)
+
+
+def github_state_restore():
+    token = str(GITHUB_CONFIG.get("token", "")).strip()
+    repo = str(GITHUB_CONFIG.get("repo", "")).strip()
+    state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
+    if not token or not repo: return
+    api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
+    try:
+        raw = github_request("GET", api, token)
+        data = json.loads(base64.b64decode(raw["content"]).decode())
+        with db() as c:
+            for table in STATE_TABLES:
+                rows = data.get(table, [])
+                if not rows: continue
+                columns = list(rows[0].keys())
+                placeholders = ",".join("?" for _ in columns)
+                c.executemany(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({placeholders})", [[row.get(col) for col in columns] for row in rows])
+            c.commit()
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404: log.warning("GitHub state restore failed: %s", exc)
+    except Exception as exc:
+        log.warning("GitHub state restore failed: %s", exc)
+
+
+async def periodic_state_sync(context):
+    try: await asyncio.to_thread(github_state_sync)
+    except Exception as exc: log.warning("GitHub state sync failed: %s", exc)
+
+
+async def save_state_now():
+    if GITHUB_CONFIG.get("token") and GITHUB_CONFIG.get("repo"):
+        try: await asyncio.to_thread(github_state_sync)
+        except Exception as exc: log.warning("Immediate GitHub state sync failed: %s", exc)
+
+
 def init_db():
     with db() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, referrals INTEGER NOT NULL DEFAULT 0,
-            banned INTEGER NOT NULL DEFAULT 0, joined_gate INTEGER NOT NULL DEFAULT 0,
+            banned INTEGER NOT NULL DEFAULT 0, joined_gate INTEGER NOT NULL DEFAULT 0, premium INTEGER NOT NULL DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP, last_seen TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS roles (user_id INTEGER PRIMARY KEY, role TEXT NOT NULL,
@@ -96,6 +173,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS referrals (inviter_id INTEGER, invitee_id INTEGER UNIQUE, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(inviter_id) REFERENCES users(id), FOREIGN KEY(invitee_id) REFERENCES users(id));
         """)
+        try: c.execute("ALTER TABLE users ADD COLUMN premium INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError: pass
         c.commit()
 
 
@@ -116,7 +195,7 @@ def get_role(uid: int) -> str:
 def is_staff(uid): return get_role(uid) in {"owner", "admin", "partner"}
 def allowed(uid, action):
     role = get_role(uid)
-    matrix = {"category": {"owner", "admin", "partner"}, "file": {"owner", "admin", "partner"}, "broadcast": {"owner", "admin", "partner"}, "admin_manage": {"owner", "partner"}, "user_manage": {"owner"}}
+    matrix = {"category": {"owner", "admin", "partner"}, "file": {"owner", "admin", "partner"}, "broadcast": {"owner", "admin", "partner"}, "admin_manage": {"owner", "partner"}, "premium_manage": {"owner", "admin", "partner"}, "user_manage": {"owner"}}
     return role in matrix.get(action, set())
 
 
@@ -128,6 +207,44 @@ def files_for(cid):
 
 def user_refs(uid):
     with db() as c: return c.execute("SELECT referrals FROM users WHERE id=?", (uid,)).fetchone()["referrals"]
+
+
+def user_status(uid):
+    if uid == OWNER_ID: return "Owner"
+    with db() as c:
+        row = c.execute("SELECT premium FROM users WHERE id=?", (uid,)).fetchone()
+    if row and row["premium"]: return "Premium User"
+    role = get_role(uid)
+    return {"admin": "Admin", "partner": "Partner"}.get(role, "Free User")
+
+
+def is_premium(uid):
+    with db() as c:
+        row = c.execute("SELECT premium FROM users WHERE id=?", (uid,)).fetchone()
+    return bool(row and row["premium"])
+
+
+def dashboard_keyboard():
+    rows = [[button(f"{x['name']}", callback_data=f"cat:{x['id']}")] for x in categories()]
+    rows.extend([
+        [button("Refer Link", "success", callback_data="refer"), button("My Balance", "primary", callback_data="balance")],
+        [button("My Account", "primary", callback_data="account")],
+    ])
+    if OWNER_CONTACT_URL:
+        rows.append([button("Contact Owner to Buy Premium", "danger", url=OWNER_CONTACT_URL)])
+    else:
+        rows.append([button("Contact Owner to Buy Premium", "danger", callback_data="contact_owner")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def send_dashboard(target, context, uid, edit=False):
+    text = f"<b>Welcome to Shadow Files Store</b>\n\n<b>Status:</b> {user_status(uid)}\n<b>Referral Balance:</b> {user_refs(uid)}"
+    if edit:
+        await target.edit_message_text(text, parse_mode="HTML", reply_markup=dashboard_keyboard())
+    elif BANNER_URL:
+        await context.bot.send_photo(uid, BANNER_URL, caption=text, parse_mode="HTML", reply_markup=dashboard_keyboard())
+    else:
+        await context.bot.send_message(uid, text, parse_mode="HTML", reply_markup=dashboard_keyboard())
 
 
 def gate_keyboard():
@@ -186,7 +303,7 @@ def user_menu():
 
 def staff_menu(uid):
     role = get_role(uid)
-    rows = [[button(f"Add Category", callback_data="add_category"), button(f"Remove Category", callback_data="remove_category")], [button(f"Add File", callback_data="add_file"), button(f"Delete File", callback_data="delete_file")], [button(f"Broadcast", callback_data="broadcast")]]
+    rows = [[button(f"Add Category", callback_data="add_category"), button(f"Remove Category", callback_data="remove_category")], [button(f"Add File", callback_data="add_file"), button(f"Delete File", callback_data="delete_file")], [button(f"Add Premium", callback_data="add_premium"), button(f"Remove Premium", callback_data="remove_premium")], [button(f"Broadcast", callback_data="broadcast")]]
     if role in {"owner", "partner"}: rows.append([button(f"Add Admin", callback_data="add_admin"), button(f"Remove Admin", callback_data="remove_admin")])
     if role == "owner": rows.extend([[button(f"Manage Partners", callback_data="partners")], [button(f"Ban/Unban User", callback_data="ban")], [button(f"Live Stats", callback_data="stats")]])
     rows.append([button("⬅️ User Panel", callback_data="home")])
@@ -204,16 +321,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exists = c.execute("SELECT 1 FROM referrals WHERE invitee_id=?", (u.id,)).fetchone()
             if not exists and c.execute("SELECT 1 FROM users WHERE id=?", (ref,)).fetchone():
                 c.execute("INSERT INTO referrals(inviter_id, invitee_id) VALUES(?,?)", (ref, u.id)); c.execute("UPDATE users SET referrals=referrals+1 WHERE id=?", (ref,)); c.commit()
+                await save_state_now()
                 try: await context.bot.send_message(ref, f"{GREEN} Aapka referral verify ho gaya! +1 point.")
                 except Exception: pass
-    await update.effective_message.reply_text(f"{GREEN} Welcome to Shadow Files Store!\n\nApna panel select karein:", reply_markup=user_menu())
+    await send_dashboard(update.effective_message, context, u.id)
 
 async def verify(update, context):
     q = update.callback_query; await q.answer()
     passed, failed_name = await check_gate(context.bot, q.from_user.id)
     if passed:
         with db() as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
-        await q.edit_message_text(f"{GREEN} Verification successful! Welcome.", reply_markup=user_menu())
+        await q.edit_message_text("<b>Verification successful.</b>", parse_mode="HTML")
+        await send_dashboard(q.message, context, q.from_user.id)
     else: await q.edit_message_text(f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein.", reply_markup=gate_keyboard())
 
 async def commands(update, context):
@@ -242,13 +361,18 @@ async def show_file(update, context):
     with db() as c:
         f=c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone(); bought=c.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_id=?", (uid,fid)).fetchone()
     if not f: return
-    if bought or user_refs(uid) >= f["required_refs"]:
+    if bought or is_premium(uid) or user_refs(uid) >= f["required_refs"]:
         await q.edit_message_text(f"{GREEN} {f['name']} ready hai. Purchase karke file receive karein.", reply_markup=InlineKeyboardMarkup([[button(f"Purchase / Get File", callback_data=f"buy:{fid}")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
     else:
         await q.edit_message_text(f"{RED} Ye file locked hai.\nRequired referrals: {f['required_refs']}\nAapke referrals: {user_refs(uid)}", reply_markup=InlineKeyboardMarkup([[button(f"Refer Link", callback_data="refer")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
 
 async def refer(update, context):
     q=update.callback_query; await q.answer(); me=await context.bot.get_me(); link=f"https://t.me/{me.username}?start={q.from_user.id}"; await q.edit_message_text(f"{BLUE} Aapka unique referral link:\n\n{link}\n\nDost ko link bhejein. Referral tab count hoga jab wo 4 Telegram communities join karke verify kare.\n\nCurrent points: {user_refs(q.from_user.id)}", reply_markup=InlineKeyboardMarkup([[button("⬅️ Home", callback_data="home")]]))
+
+
+async def account(update, context):
+    q = update.callback_query; await q.answer()
+    await q.edit_message_text(f"<b>My Account</b>\n\n<b>User ID:</b> <code>{q.from_user.id}</code>\n<b>Status:</b> {user_status(q.from_user.id)}\n<b>Referral Balance:</b> {user_refs(q.from_user.id)}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[button("Back", callback_data="home")]]))
 
 async def panel_action(update, context):
     q=update.callback_query; await q.answer(); uid=q.from_user.id; action=q.data
@@ -258,12 +382,16 @@ async def panel_action(update, context):
             rows=[[button(f"{x['name']}", callback_data=f"rmcat:{x['id']}")] for x in categories()]; await q.edit_message_text("Remove karne wali category select karein:", reply_markup=InlineKeyboardMarkup(rows))
     elif action in {"add_file","delete_file"} and allowed(uid,"file"):
         if action=="add_file":
-            rows=[[button(x['name'], callback_data=f"newfilecat:{x['id']}")] for x in categories()]; context.user_data["state"]=ADD_FILE; await q.edit_message_text("File kis category mein add karni hai?", reply_markup=InlineKeyboardMarkup(rows))
+            rows=[[button(x['name'], callback_data=f"newfilecat:{x['id']}")] for x in categories()]
+            rows.append([button("Add a new category", "success", callback_data="addfile_newcat")])
+            context.user_data["state"]=ADD_FILE; await q.edit_message_text("File kis category mein add karni hai?", reply_markup=InlineKeyboardMarkup(rows))
         else:
             rows=[[button(f"📄 {x['name']}", callback_data=f"rmfile:{x['id']}")] for cat in categories() for x in files_for(cat['id'])]; await q.edit_message_text("Delete karne wali file:", reply_markup=InlineKeyboardMarkup(rows))
     elif action=="broadcast" and allowed(uid,"broadcast"): context.user_data["state"]=BROADCAST; await q.edit_message_text("Broadcast message bhejein:")
-    elif action in {"add_admin","remove_admin","partners","ban","stats"}:
-        if action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"): context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
+    elif action in {"add_admin","remove_admin","partners","ban","stats","add_premium","remove_premium"}:
+        if action in {"add_premium","remove_premium"} and allowed(uid,"premium_manage"):
+            context.user_data["premium_action"] = action; await q.edit_message_text("Premium user ka numeric Telegram ID bhejein:")
+        elif action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"): context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
         elif action=="stats" and uid==OWNER_ID:
             with db() as c: u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; await q.edit_message_text(f"{GOLD} Stats\nUsers: {u}\nFiles: {f}", reply_markup=staff_menu(uid))
         else: await q.edit_message_text(f"{RED} Ye option aapke role ke liye available nahi.", reply_markup=staff_menu(uid))
@@ -273,7 +401,15 @@ async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
     if state==ADD_CATEGORY:
         with db() as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)",(text,uid)); c.commit()
-        context.user_data.pop("state",None); await update.message.reply_text(f"{GREEN} Category add ho gayi.", reply_markup=staff_menu(uid)); return
+        if context.user_data.pop("after_category", None) == "add_file":
+            rows=[[button(x['name'], callback_data=f"newfilecat:{x['id']}")] for x in categories()]
+            rows.append([button("Add a new category", "success", callback_data="addfile_newcat")])
+            context.user_data["state"] = ADD_FILE
+            await update.message.reply_text("Category add ho gayi. Ab category select karein:", reply_markup=InlineKeyboardMarkup(rows))
+        else:
+            context.user_data.pop("state",None); await update.message.reply_text(f"{GREEN} Category add ho gayi.", reply_markup=staff_menu(uid))
+        await save_state_now()
+        return
     if state==BROADCAST:
         with db() as c: users=c.execute("SELECT id FROM users WHERE banned=0").fetchall()
         sent=0
@@ -288,7 +424,13 @@ async def text_handler(update, context):
             if role_action=="add_admin": c.execute("INSERT INTO roles(user_id,role) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET role='admin'",(int(text),))
             else: c.execute("DELETE FROM roles WHERE user_id=? AND role='admin'",(int(text),))
             c.commit()
-        await update.message.reply_text(f"{GREEN} Role update ho gaya.", reply_markup=staff_menu(uid)); return
+        await save_state_now(); await update.message.reply_text(f"{GREEN} Role update ho gaya.", reply_markup=staff_menu(uid)); return
+    if context.user_data.get("premium_action"):
+        if not text.isdigit(): await update.message.reply_text("Valid numeric user ID dein."); return
+        action = context.user_data.pop("premium_action")
+        with db() as c:
+            c.execute("INSERT INTO users(id, username, first_name, premium) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET premium=?", (int(text), 1 if action == "add_premium" else 0, 1 if action == "add_premium" else 0)); c.commit()
+        await save_state_now(); await update.message.reply_text("Premium status update ho gaya.", reply_markup=staff_menu(uid)); return
     await update.message.reply_text("Menu se option select karein.", reply_markup=user_menu())
 
 async def callback_router(update, context):
@@ -299,15 +441,26 @@ async def callback_router(update, context):
     if data.startswith("cat:"): return await show_files(update,context)
     if data.startswith("file:"): return await show_file(update,context)
     if data=="refer": return await refer(update,context)
+    if data=="balance":
+        await q.answer(f"Referral Balance: {user_refs(q.from_user.id)}", show_alert=True); return
+    if data=="account": return await account(update, context)
+    if data=="contact_owner":
+        await q.answer("Owner se premium purchase ke liye direct contact karein.", show_alert=True); return
     if data.startswith("buy:"):
         fid=int(data.split(":")[1]); uid=q.from_user.id
         with db() as c:
             f=c.execute("SELECT * FROM files WHERE id=?",(fid,)).fetchone()
-            if user_refs(uid)<f["required_refs"]: await q.answer("Referrals kam hain",show_alert=True); return
+            if not is_premium(uid) and user_refs(uid)<f["required_refs"]: await q.answer("Referrals kam hain",show_alert=True); return
             c.execute("INSERT OR IGNORE INTO purchases(user_id,file_id) VALUES(?,?)",(uid,fid)); c.commit()
+        await save_state_now()
         await q.answer("File unlock ho gayi!"); await context.bot.send_document(uid, f["file_id"], caption=f"{GREEN} {f['name']}"); return
     if data.startswith("newfilecat:"):
         context.user_data["file_category"]=int(data.split(":")[1]); context.user_data["state"]=SET_FILE_NAME; await q.edit_message_text("Ab file upload karein (document):")
+        return
+    if data == "addfile_newcat":
+        context.user_data["state"] = ADD_CATEGORY
+        context.user_data["after_category"] = "add_file"
+        await q.edit_message_text("New category ka naam bhejein:")
         return
     if data.startswith("rmcat:"):
         with db() as c: c.execute("DELETE FROM categories WHERE id=?",(int(data.split(":")[1]),)); c.commit()
@@ -336,13 +489,15 @@ async def refs_handler(update, context):
     for user in users:
         try: await context.bot.send_message(user["id"], f"{GREEN} New file add hui hai: {name}\\nRequired referrals: {refs}")
         except Exception: pass
-    context.user_data.clear(); await update.message.reply_text(f"{GREEN} File add ho gayi aur users ko notification bhej di gayi.",reply_markup=staff_menu(uid))
+    await save_state_now(); context.user_data.clear(); await update.message.reply_text(f"{GREEN} File add ho gayi aur users ko notification bhej di gayi.",reply_markup=staff_menu(uid))
 
 async def on_error(update, context): log.exception("Unhandled error", exc_info=context.error)
 
 def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
-    init_db(); app=Application.builder().token(BOT_TOKEN).build()
+    init_db(); github_state_restore(); app=Application.builder().token(BOT_TOKEN).build()
+    if GITHUB_CONFIG.get("token") and GITHUB_CONFIG.get("repo"):
+        app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.Document.ALL,document_handler))
