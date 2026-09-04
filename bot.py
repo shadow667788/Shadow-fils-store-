@@ -4,6 +4,7 @@ import base64
 import asyncio
 import time
 import os
+import sys
 import sqlite3
 import urllib.request
 import urllib.error
@@ -18,7 +19,7 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, TypeHandler, ApplicationHandlerStop, filters,
 )
 
-logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
+logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger("shadow-files")
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -316,7 +317,7 @@ async def check_gate(bot, uid: int):
             resolved = await bot.get_chat(chat_id)
             canonical_id = resolved.id
             m = await bot.get_chat_member(canonical_id, uid)
-            log.info("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
+            log.debug("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
             status = getattr(m.status, "value", str(m.status)).lower()
             if status in {"creator", "administrator", "member"}:
                 continue
@@ -428,7 +429,6 @@ async def verify(update, context):
     else: await q.edit_message_text(f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein.", reply_markup=gate_keyboard())
 
 async def commands(update, context):
-    if not await enforce_membership(update, context): return
     uid = update.effective_user.id
     if update.message.text.startswith("/owner") or update.message.text.startswith("/admin") or update.message.text.startswith("/partner"):
         requested = update.message.text[1:].split()[0]
@@ -504,7 +504,6 @@ async def panel_action(update, context):
     else: await q.edit_message_text(f"{RED} Permission denied.", reply_markup=staff_menu(uid))
 
 async def text_handler(update, context):
-    if not await enforce_membership(update, context): return
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
     # Role/user-management IDs must be handled before upload, referral, or broadcast states.
     if context.user_data.get("role_action") or context.user_data.get("premium_action") or context.user_data.get("ban_action"):
@@ -598,7 +597,6 @@ async def text_handler(update, context):
     await update.message.reply_text("Menu se option select karein.", reply_markup=user_menu())
 
 async def callback_router(update, context):
-    if not await enforce_membership(update, context): return
     q=update.callback_query; data=q.data
     if data=="verify_gate": return await verify(update,context)
     if data=="home": return await home(update,context)
@@ -641,17 +639,14 @@ async def callback_router(update, context):
     return await panel_action(update,context)
 
 async def document_handler(update, context):
-    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.document.file_id, "document"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("File ka display name bhejein:")
 
 async def name_handler(update, context):
-    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != SET_FILE_REFS: return await text_handler(update,context)
     context.user_data["file_name"]=update.message.text.strip(); context.user_data["state"]="refs"; await update.message.reply_text("Unlock ke liye kitne referrals required hain? Number bhejein:")
 
 async def refs_handler(update, context):
-    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != "refs": return await text_handler(update,context)
     try: refs=int(update.message.text.strip()); assert refs>=0
     except Exception: await update.message.reply_text("Sirf positive number bhejein."); return
