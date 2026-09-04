@@ -417,19 +417,20 @@ async def panel_action(update, context):
     elif action == "partners" and uid == OWNER_ID:
         await q.edit_message_text("Partner Management:", reply_markup=InlineKeyboardMarkup([[button("Add Partner", "success", callback_data="add_partner"), button("Remove Partner", "danger", callback_data="remove_partner")], [button("Back", callback_data="owner_back")]]))
     elif action in {"add_partner","remove_partner"} and uid == OWNER_ID:
-        context.user_data["role_action"] = action; await q.edit_message_text("Partner user ka numeric Telegram ID bhejein:")
+        context.user_data.pop("state", None); context.user_data["role_action"] = action; await q.edit_message_text("Partner user ka numeric Telegram ID bhejein:")
     elif action == "ban" and uid == OWNER_ID:
         await q.edit_message_text("User Management:", reply_markup=InlineKeyboardMarkup([[button("Ban User", "danger", callback_data="ban_user"), button("Unban User", "success", callback_data="unban_user")], [button("Back", callback_data="owner_back")]]))
     elif action in {"ban_user","unban_user"} and uid == OWNER_ID:
-        context.user_data["ban_action"] = action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
+        context.user_data.pop("state", None); context.user_data["ban_action"] = action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
     elif action == "stats" and uid == OWNER_ID:
         with db() as c:
             u=c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM files").fetchone()["n"]; r=c.execute("SELECT COUNT(*) n FROM referrals").fetchone()["n"]; p=c.execute("SELECT COUNT(*) n FROM users WHERE premium=1").fetchone()["n"]
         await q.edit_message_text(f"<b>Live Stats</b>\n\nUsers: {u}\nFiles: {f}\nReferrals: {r}\nPremium Users: {p}", parse_mode="HTML", reply_markup=staff_menu(uid))
     elif action in {"add_admin","remove_admin","add_premium","remove_premium"}:
         if action in {"add_premium","remove_premium"} and allowed(uid,"premium_manage"):
-            context.user_data["premium_action"] = action; await q.edit_message_text("Premium user ka numeric Telegram ID bhejein:")
-        elif action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"): context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
+            context.user_data.pop("state", None); context.user_data["premium_action"] = action; await q.edit_message_text("Premium user ka numeric Telegram ID bhejein:")
+        elif action in {"add_admin","remove_admin"} and allowed(uid,"admin_manage"):
+            context.user_data.pop("state", None); context.user_data["role_action"]=action; await q.edit_message_text("User ka numeric Telegram ID bhejein:")
         else: await q.edit_message_text(f"{RED} Ye option aapke role ke liye available nahi.", reply_markup=staff_menu(uid))
     elif action == "owner_back":
         await q.edit_message_text("Owner Panel", reply_markup=staff_menu(uid))
@@ -437,6 +438,35 @@ async def panel_action(update, context):
 
 async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
+    # Role/user-management IDs must be handled before upload, referral, or broadcast states.
+    if context.user_data.get("role_action") or context.user_data.get("premium_action") or context.user_data.get("ban_action"):
+        if not text.isdigit(): await update.message.reply_text("Valid numeric Telegram ID dein."); return
+        if context.user_data.get("role_action"):
+            role_action=context.user_data.pop("role_action")
+            role = "admin" if role_action == "add_admin" else "partner" if role_action == "add_partner" else "user"
+            with db() as c:
+                if role_action in {"add_admin", "add_partner"}: c.execute("INSERT INTO roles(user_id,role) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET role=?", (int(text), role, role))
+                else: c.execute("DELETE FROM roles WHERE user_id=? AND role=?", (int(text), "admin" if role_action == "remove_admin" else "partner"))
+                c.commit()
+            await save_state_now()
+            notices = {"add_admin": "Aapko Admin bana diya gaya hai. Admin panel ke liye /admin command use karein.", "remove_admin": "Aapka Admin access remove kar diya gaya hai.", "add_partner": "Aapko Partner bana diya gaya hai. Partner panel ke liye /partner command use karein.", "remove_partner": "Aapka Partner access remove kar diya gaya hai."}
+            try: await context.bot.send_message(int(text), notices[role_action])
+            except Exception as exc: log.warning("Role notification failed: %s", exc)
+            await update.message.reply_text("Role update ho gaya aur user ko notification bhej di gayi.", reply_markup=staff_menu(uid)); return
+        if context.user_data.get("premium_action"):
+            action = context.user_data.pop("premium_action")
+            with db() as c:
+                value = 1 if action == "add_premium" else 0
+                c.execute("INSERT INTO users(id, username, first_name, premium) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET premium=?", (int(text), value, value)); c.commit()
+            await save_state_now()
+            try: await context.bot.send_message(int(text), "Aapko Premium User bana diya gaya hai." if value else "Aapka Premium access remove kar diya gaya hai.")
+            except Exception as exc: log.warning("Premium notification failed: %s", exc)
+            await update.message.reply_text("Premium status update ho gaya.", reply_markup=staff_menu(uid)); return
+        action = context.user_data.pop("ban_action")
+        value = 1 if action == "ban_user" else 0
+        with db() as c:
+            c.execute("INSERT INTO users(id, username, first_name, banned) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET banned=?", (int(text), value, value)); c.commit()
+        await save_state_now(); await update.message.reply_text("User status update ho gaya.", reply_markup=staff_menu(uid)); return
     if state is None and text in {"🔗 Refer Link", "💰 My Balance", "👤 My Account", "💎 Contact Owner to Buy Premium"}:
         if text == "💰 My Balance":
             await update.message.reply_text(f"<b>My Balance:</b> {user_refs(uid)} referrals", parse_mode="HTML"); return
