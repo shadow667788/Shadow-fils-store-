@@ -10,7 +10,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Update
 from telegram.constants import ChatMemberStatus
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
@@ -84,6 +84,7 @@ def db():
 
 
 STATE_TABLES = ("users", "roles", "categories", "files", "purchases", "referrals")
+LAST_SYNC_ERROR = None
 
 
 def state_payload():
@@ -142,8 +143,17 @@ def github_state_restore():
 
 
 async def periodic_state_sync(context):
-    try: await asyncio.to_thread(github_state_sync)
-    except Exception as exc: log.warning("GitHub state sync failed: %s", exc)
+    global LAST_SYNC_ERROR
+    try:
+        await asyncio.to_thread(github_state_sync)
+        LAST_SYNC_ERROR = None
+    except Exception as exc:
+        reason = str(exc)
+        log.warning("GitHub state sync failed: %s", reason)
+        if reason != LAST_SYNC_ERROR:
+            LAST_SYNC_ERROR = reason
+            try: await context.bot.send_message(OWNER_ID, f"GitHub data upload failed.\n\nReason: {reason}\n\nBot state abhi local memory mein hai; next sync par dobara try hoga.")
+            except Exception: pass
 
 
 async def save_state_now():
@@ -224,27 +234,25 @@ def is_premium(uid):
     return bool(row and row["premium"])
 
 
+def category_keyboard():
+    return InlineKeyboardMarkup([[button(x["name"], callback_data=f"cat:{x['id']}")] for x in categories()])
+
+
 def dashboard_keyboard():
-    rows = [[button(f"{x['name']}", callback_data=f"cat:{x['id']}")] for x in categories()]
-    rows.extend([
-        [button("Refer Link", "success", callback_data="refer"), button("My Balance", "primary", callback_data="balance")],
-        [button("My Account", "primary", callback_data="account")],
-    ])
-    if OWNER_CONTACT_URL:
-        rows.append([button("Contact Owner to Buy Premium", "danger", url=OWNER_CONTACT_URL)])
-    else:
-        rows.append([button("Contact Owner to Buy Premium", "danger", callback_data="contact_owner")])
-    return InlineKeyboardMarkup(rows)
+    rows = [[KeyboardButton("Refer Link"), KeyboardButton("My Balance")], [KeyboardButton("My Account")]]
+    rows.append([KeyboardButton("Contact Owner to Buy Premium")])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
 
 async def send_dashboard(target, context, uid, edit=False):
     text = f"<b>Welcome to Shadow Files Store</b>\n\n<b>Status:</b> {user_status(uid)}\n<b>Referral Balance:</b> {user_refs(uid)}"
     if edit:
-        await target.edit_message_text(text, parse_mode="HTML", reply_markup=dashboard_keyboard())
+        await target.edit_message_text(text, parse_mode="HTML")
     elif BANNER_URL:
         await context.bot.send_photo(uid, BANNER_URL, caption=text, parse_mode="HTML", reply_markup=dashboard_keyboard())
     else:
         await context.bot.send_message(uid, text, parse_mode="HTML", reply_markup=dashboard_keyboard())
+    await context.bot.send_message(uid, "<b>Categories</b>", parse_mode="HTML", reply_markup=category_keyboard())
 
 
 def gate_keyboard():
@@ -399,6 +407,17 @@ async def panel_action(update, context):
 
 async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
+    if state is None and text in {"Refer Link", "My Balance", "My Account", "Contact Owner to Buy Premium"}:
+        if text == "My Balance":
+            await update.message.reply_text(f"<b>My Balance:</b> {user_refs(uid)} referrals", parse_mode="HTML"); return
+        if text == "My Account":
+            await update.message.reply_text(f"<b>My Account</b>\n\n<b>Status:</b> {user_status(uid)}\n<b>User ID:</b> <code>{uid}</code>\n<b>Balance:</b> {user_refs(uid)}", parse_mode="HTML"); return
+        if text == "Contact Owner to Buy Premium":
+            if OWNER_CONTACT_URL: await update.message.reply_text("Premium purchase ke liye owner se contact karein.", reply_markup=InlineKeyboardMarkup([[button("Contact Owner", "danger", url=OWNER_CONTACT_URL)]]))
+            else: await update.message.reply_text("Owner contact abhi config.json mein set nahi hai.")
+            return
+        me = await context.bot.get_me(); link = f"https://t.me/{me.username}?start={uid}"
+        await update.message.reply_text(f"<b>Your Refer Link</b>\n\n{link}\n\nBalance: {user_refs(uid)}", parse_mode="HTML"); return
     if state==ADD_CATEGORY:
         with db() as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)",(text,uid)); c.commit()
         if context.user_data.pop("after_category", None) == "add_file":
@@ -495,9 +514,10 @@ async def on_error(update, context): log.exception("Unhandled error", exc_info=c
 
 def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
+    if not str(GITHUB_CONFIG.get("repo", "")).strip() or not str(GITHUB_CONFIG.get("token", "")).strip():
+        raise RuntimeError("github.repo aur github.token config.json mein required hain.")
     init_db(); github_state_restore(); app=Application.builder().token(BOT_TOKEN).build()
-    if GITHUB_CONFIG.get("token") and GITHUB_CONFIG.get("repo"):
-        app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
+    app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.Document.ALL,document_handler))
