@@ -1,28 +1,28 @@
 {
-  "bot_token": "PUT_BOT_TOKEN_HERE",
-  "owner_id": 123456789,
+  "bot_token": "8905879643:AAEH1yts038KQVqi_iLVOYmCPcM7rG_kGn8",
+  "owner_id": 7441729576,
   "whatsapp_channel": {
-    "name": "WhatsApp Channel",
-    "url": "https://wa.me/channel/PUT_LINK_HERE"
+    "name": "SHADOW OFFICIAL",
+    "url": "https://whatsapp.com/channel/0029Vb8rXu8GufIzCWxRZB02"
   },
   "required": [
     {
       "type": "channel",
-      "name": "Telegram Channel 1",
-      "chat_id": "@your_channel_one",
-      "join_url": "https://t.me/your_channel_one"
+      "name": "SHADOW OFFICIAL",
+      "chat_id": "@sk_official_dev",
+      "join_url": "https://t.me/sk_official_dev"
     },
     {
       "type": "channel",
-      "name": "Telegram Channel 2",
-      "chat_id": "@your_channel_two",
-      "join_url": "https://t.me/your_channel_two"
+      "name": "SHADOW DEV",
+      "chat_id": "@sk_dev_official",
+      "join_url": "https://t.me/sk_dev_official"
     },
     {
       "type": "group",
-      "name": "Telegram Group",
-      "chat_id": "@your_group",
-      "join_url": "https://t.me/your_group"
+      "name": "SHADOW IS BACK",
+      "chat_id": "@shadow_is_bacc",
+      "join_url": "https://t.me/shadow_is_bacc"
     }
   ]
 }
