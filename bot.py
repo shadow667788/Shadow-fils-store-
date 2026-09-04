@@ -37,6 +37,7 @@ WA_NAME = str(CONFIG.get("whatsapp_channel", {}).get("name", "WhatsApp Channel")
 BANNER_URL = str(CONFIG.get("banner_url", "")).strip()
 OWNER_CONTACT_URL = str(CONFIG.get("owner_contact_url", "")).strip()
 GITHUB_CONFIG = CONFIG.get("github", {})
+GITHUB_TOKEN = str(GITHUB_CONFIG.get("token", "")).strip() or os.getenv("GITHUB_TOKEN", "").strip()
 REQUIRED = CONFIG.get("required", [])
 CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
 GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
@@ -104,7 +105,7 @@ def github_request(method, url, token, data=None):
 
 
 def github_state_sync():
-    token = str(GITHUB_CONFIG.get("token", "")).strip()
+    token = GITHUB_TOKEN
     repo = str(GITHUB_CONFIG.get("repo", "")).strip()
     state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
     if not token or not repo: return
@@ -120,7 +121,7 @@ def github_state_sync():
 
 
 def github_state_restore():
-    token = str(GITHUB_CONFIG.get("token", "")).strip()
+    token = GITHUB_TOKEN
     repo = str(GITHUB_CONFIG.get("repo", "")).strip()
     state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
     if not token or not repo: return
@@ -157,7 +158,7 @@ async def periodic_state_sync(context):
 
 
 async def save_state_now():
-    if GITHUB_CONFIG.get("token") and GITHUB_CONFIG.get("repo"):
+    if GITHUB_TOKEN and GITHUB_CONFIG.get("repo"):
         try: await asyncio.to_thread(github_state_sync)
         except Exception as exc: log.warning("Immediate GitHub state sync failed: %s", exc)
 
@@ -514,8 +515,8 @@ async def on_error(update, context): log.exception("Unhandled error", exc_info=c
 
 def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
-    if not str(GITHUB_CONFIG.get("repo", "")).strip() or not str(GITHUB_CONFIG.get("token", "")).strip():
-        raise RuntimeError("github.repo aur github.token config.json mein required hain.")
+    if not str(GITHUB_CONFIG.get("repo", "")).strip() or not GITHUB_TOKEN:
+        raise RuntimeError("github.repo aur GITHUB_TOKEN environment variable required hain.")
     init_db(); github_state_restore(); app=Application.builder().token(BOT_TOKEN).build()
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
