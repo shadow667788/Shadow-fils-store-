@@ -352,6 +352,25 @@ async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_
         await update.effective_message.reply_text(message, reply_markup=gate_keyboard())
     raise ApplicationHandlerStop
 
+
+async def enforce_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    query = update.callback_query
+    if query and query.data == "verify_gate":
+        return True
+    user = update.effective_user
+    if not user:
+        return True
+    passed, failed_name = await check_gate(context.bot, user.id)
+    if passed:
+        return True
+    message = f"Aapka access block hai. Aap ne **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
+    if query:
+        await query.answer("Membership incomplete", show_alert=True)
+        await query.edit_message_text(message, reply_markup=gate_keyboard())
+    elif update.effective_message:
+        await update.effective_message.reply_text(message, reply_markup=gate_keyboard())
+    return False
+
 async def gate_or_prompt(update, context) -> bool:
     uid = update.effective_user.id
     passed, failed_name = await check_gate(context.bot, uid)
@@ -409,6 +428,7 @@ async def verify(update, context):
     else: await q.edit_message_text(f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein.", reply_markup=gate_keyboard())
 
 async def commands(update, context):
+    if not await enforce_membership(update, context): return
     uid = update.effective_user.id
     if update.message.text.startswith("/owner") or update.message.text.startswith("/admin") or update.message.text.startswith("/partner"):
         requested = update.message.text[1:].split()[0]
@@ -484,6 +504,7 @@ async def panel_action(update, context):
     else: await q.edit_message_text(f"{RED} Permission denied.", reply_markup=staff_menu(uid))
 
 async def text_handler(update, context):
+    if not await enforce_membership(update, context): return
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
     # Role/user-management IDs must be handled before upload, referral, or broadcast states.
     if context.user_data.get("role_action") or context.user_data.get("premium_action") or context.user_data.get("ban_action"):
@@ -577,6 +598,7 @@ async def text_handler(update, context):
     await update.message.reply_text("Menu se option select karein.", reply_markup=user_menu())
 
 async def callback_router(update, context):
+    if not await enforce_membership(update, context): return
     q=update.callback_query; data=q.data
     if data=="verify_gate": return await verify(update,context)
     if data=="home": return await home(update,context)
@@ -619,14 +641,17 @@ async def callback_router(update, context):
     return await panel_action(update,context)
 
 async def document_handler(update, context):
+    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.document.file_id, "document"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("File ka display name bhejein:")
 
 async def name_handler(update, context):
+    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != SET_FILE_REFS: return await text_handler(update,context)
     context.user_data["file_name"]=update.message.text.strip(); context.user_data["state"]="refs"; await update.message.reply_text("Unlock ke liye kitne referrals required hain? Number bhejein:")
 
 async def refs_handler(update, context):
+    if not await enforce_membership(update, context): return
     if context.user_data.get("state") != "refs": return await text_handler(update,context)
     try: refs=int(update.message.text.strip()); assert refs>=0
     except Exception: await update.message.reply_text("Sirf positive number bhejein."); return
