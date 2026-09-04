@@ -60,7 +60,12 @@ def button(text, style=None, callback_data=None, url=None):
 def chat_spec(value):
     """Allow CHAT_ID or CHAT_ID|INVITE_URL in environment variables."""
     parts = value.split("|", 1)
-    return parts[0].strip(), parts[1].strip() if len(parts) == 2 else None
+    chat_id = parts[0].strip()
+    if chat_id.startswith("https://t.me/") and "/+" not in chat_id:
+        chat_id = "@" + chat_id.rstrip("/").split("/")[-1]
+    if chat_id and not chat_id.startswith("@") and not chat_id.startswith("-") and not chat_id.startswith("http"):
+        chat_id = f"@{chat_id}"
+    return chat_id, parts[1].strip() if len(parts) == 2 else None
 
 
 def db():
@@ -124,14 +129,16 @@ def user_refs(uid):
 
 def gate_keyboard():
     rows = []
+    styles = ("success", "primary", "danger")
     for i, chat in enumerate(CHANNELS + GROUPS):
         chat_id, invite = chat_spec(chat)
         label = f"{BLUE} Join Telegram {'Channel' if i < len(CHANNELS) else 'Group'} {i + 1}"
         link = invite or (chat_id if chat_id.startswith("http") else f"https://t.me/{chat_id.lstrip('@')}")
-        rows.append([button(label, "primary", url=link)])
+        rows.append([button(label, styles[i % len(styles)], url=link)])
     if WA_URL:
-        rows.append([button("🟢 Optional WhatsApp Channel", "success", url=WA_URL)])
-    rows.append([button(f"{GREEN} Verify Membership", "success", callback_data="verify_gate")])
+        rows.append([button("🟢 Join WhatsApp Channel (Required)", styles[(len(CHANNELS) + len(GROUPS)) % len(styles)], url=WA_URL)])
+    verify_style = styles[(len(CHANNELS) + len(GROUPS) + (1 if WA_URL else 0)) % len(styles)]
+    rows.append([button(f"{GREEN} Verify Telegram Membership", verify_style, callback_data="verify_gate")])
     return InlineKeyboardMarkup(rows)
 
 async def check_gate(bot, uid: int) -> bool:
@@ -145,7 +152,7 @@ async def check_gate(bot, uid: int) -> bool:
             if m.status == ChatMemberStatus.RESTRICTED and not getattr(m, "is_member", False):
                 return False
         except Exception as e:
-            log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, e)
+            log.warning("Gate check failed for chat=%s user=%s: %s", chat_id, uid, repr(e))
             return False
     return True
 
@@ -155,7 +162,7 @@ async def gate_or_prompt(update, context) -> bool:
         with db() as c:
             c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (uid,)); c.commit()
         return True
-    text = f"{RED} Access band hai. Neeche diye gaye tamam Telegram channels aur groups join karein, phir Verify Membership dabayein.\n\nWhatsApp link optional hai."
+    text = f"{RED} Access band hai. Neeche diye gaye tamam Telegram channels, groups aur WhatsApp channel join karein, phir Verify Telegram Membership dabayein.\n\nWhatsApp channel join karna required hai, lekin WhatsApp membership automatically check nahi hoti."
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=gate_keyboard())
     else:
@@ -196,7 +203,7 @@ async def verify(update, context):
     if await check_gate(context.bot, q.from_user.id):
         with db() as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
         await q.edit_message_text(f"{GREEN} Verification successful! Welcome.", reply_markup=user_menu())
-    else: await q.edit_message_text(f"{RED} Neeche diye gaye tamam channels aur groups join karein. Agar join kar chuke hain to 10 seconds baad dobara Verify Membership dabayein.", reply_markup=gate_keyboard())
+    else: await q.edit_message_text(f"{RED} Telegram ke neeche diye gaye tamam channels aur groups join karein. Bot ko un sab mein admin hona chahiye. Agar join kar chuke hain to 10 seconds baad dobara Verify Telegram Membership dabayein.\n\nWhatsApp channel required hai, lekin uski membership check nahi hoti.", reply_markup=gate_keyboard())
 
 async def commands(update, context):
     uid = update.effective_user.id

@@ -9,7 +9,7 @@ Telegram Bot API inline buttons ka background color bot se set nahi karne deta. 
 ## Features
 
 - Do Telegram channels aur do Telegram groups ki mandatory membership verification.
-- Optional WhatsApp channel link; WhatsApp membership check nahi hoti.
+- WhatsApp channel join required message/link; WhatsApp membership check nahi hoti.
 - User, owner, admin aur partner panels.
 - Owner: full access, categories/files, broadcasts, stats, role management ke hooks.
 - Admin: category add/remove, file upload/delete aur broadcast.
