@@ -1,5 +1,5 @@
 {
-  "bot_token": "8905879643:AAEH1yts038KQVqi_iLVOYmCPcM7rG_kGn8",
+  "bot_token": "8962029879:AAF_roMzvlHqpZGWh_qRVgL6w1UrdacZ_HA",
   "owner_id": 7441729576,
   "whatsapp_channel": {
     "name": "SHADOW OFFICIAL channel",
