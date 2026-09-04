@@ -2,7 +2,7 @@
   "bot_token": "8905879643:AAEH1yts038KQVqi_iLVOYmCPcM7rG_kGn8",
   "owner_id": 7441729576,
   "whatsapp_channel": {
-    "name": "SHADOW OFFICIAL",
+    "name": "SHADOW OFFICIAL channel",
     "url": "https://whatsapp.com/channel/0029Vb8rXu8GufIzCWxRZB02"
   },
   "required": [
