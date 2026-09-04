@@ -135,13 +135,13 @@ def gate_keyboard():
     styles = ("success", "primary", "danger")
     for i, chat in enumerate(CHANNELS + GROUPS):
         chat_id, invite, display_name = chat_spec(chat)
-        label = f"{BLUE} Join Telegram {'Channel' if i < len(CHANNELS) else 'Group'} {i + 1}"
+        label = f"Join {display_name}"
         link = invite or (chat_id if chat_id.startswith("http") else f"https://t.me/{chat_id.lstrip('@')}")
         rows.append([button(label, styles[i % len(styles)], url=link)])
     if WA_URL:
-        rows.append([button("🟢 Join WhatsApp Channel (Required)", styles[(len(CHANNELS) + len(GROUPS)) % len(styles)], url=WA_URL)])
+        rows.append([button("Join WhatsApp Channel (Required)", styles[(len(CHANNELS) + len(GROUPS)) % len(styles)], url=WA_URL)])
     verify_style = styles[(len(CHANNELS) + len(GROUPS) + (1 if WA_URL else 0)) % len(styles)]
-    rows.append([button(f"{GREEN} Verify Telegram Membership", verify_style, callback_data="verify_gate")])
+    rows.append([button("Verify Membership", verify_style, callback_data="verify_gate")])
     return InlineKeyboardMarkup(rows)
 
 async def check_gate(bot, uid: int):
@@ -149,7 +149,12 @@ async def check_gate(bot, uid: int):
     for chat in CHANNELS + GROUPS:
         chat_id, _, display_name = chat_spec(chat)
         try:
-            m = await bot.get_chat_member(chat_id, uid)
+            # Resolve public usernames first. This avoids false negatives caused by
+            # username aliases/renames and makes the membership lookup deterministic.
+            resolved = await bot.get_chat(chat_id)
+            canonical_id = resolved.id
+            m = await bot.get_chat_member(canonical_id, uid)
+            log.info("Membership check chat=%s canonical=%s user=%s status=%s is_member=%s", display_name, canonical_id, uid, m.status, getattr(m, "is_member", None))
             if m.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
                 return False, display_name
             if m.status == ChatMemberStatus.RESTRICTED and not getattr(m, "is_member", False):
@@ -175,14 +180,14 @@ async def gate_or_prompt(update, context) -> bool:
 
 
 def user_menu():
-    rows = [[button(f"{BLUE} Categories", callback_data="categories"), button(f"{GREEN} Refer & Earn", callback_data="refer")]]
+    rows = [[button(f"Categories", callback_data="categories"), button(f"Refer & Earn", callback_data="refer")]]
     return InlineKeyboardMarkup(rows)
 
 def staff_menu(uid):
     role = get_role(uid)
-    rows = [[button(f"{BLUE} Add Category", callback_data="add_category"), button(f"{RED} Remove Category", callback_data="remove_category")], [button(f"{GREEN} Add File", callback_data="add_file"), button(f"{RED} Delete File", callback_data="delete_file")], [button(f"{GOLD} Broadcast", callback_data="broadcast")]]
-    if role in {"owner", "partner"}: rows.append([button(f"{BLUE} Add Admin", callback_data="add_admin"), button(f"{RED} Remove Admin", callback_data="remove_admin")])
-    if role == "owner": rows.extend([[button(f"{GREEN} Manage Partners", callback_data="partners")], [button(f"{RED} Ban/Unban User", callback_data="ban")], [button(f"{GOLD} Live Stats", callback_data="stats")]])
+    rows = [[button(f"Add Category", callback_data="add_category"), button(f"Remove Category", callback_data="remove_category")], [button(f"Add File", callback_data="add_file"), button(f"Delete File", callback_data="delete_file")], [button(f"Broadcast", callback_data="broadcast")]]
+    if role in {"owner", "partner"}: rows.append([button(f"Add Admin", callback_data="add_admin"), button(f"Remove Admin", callback_data="remove_admin")])
+    if role == "owner": rows.extend([[button(f"Manage Partners", callback_data="partners")], [button(f"Ban/Unban User", callback_data="ban")], [button(f"Live Stats", callback_data="stats")]])
     rows.append([button("⬅️ User Panel", callback_data="home")])
     return InlineKeyboardMarkup(rows)
 
@@ -237,9 +242,9 @@ async def show_file(update, context):
         f=c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone(); bought=c.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_id=?", (uid,fid)).fetchone()
     if not f: return
     if bought or user_refs(uid) >= f["required_refs"]:
-        await q.edit_message_text(f"{GREEN} {f['name']} ready hai. Purchase karke file receive karein.", reply_markup=InlineKeyboardMarkup([[button(f"{GREEN} Purchase / Get File", callback_data=f"buy:{fid}")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
+        await q.edit_message_text(f"{GREEN} {f['name']} ready hai. Purchase karke file receive karein.", reply_markup=InlineKeyboardMarkup([[button(f"Purchase / Get File", callback_data=f"buy:{fid}")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
     else:
-        await q.edit_message_text(f"{RED} Ye file locked hai.\nRequired referrals: {f['required_refs']}\nAapke referrals: {user_refs(uid)}", reply_markup=InlineKeyboardMarkup([[button(f"{BLUE} Refer Link", callback_data="refer")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
+        await q.edit_message_text(f"{RED} Ye file locked hai.\nRequired referrals: {f['required_refs']}\nAapke referrals: {user_refs(uid)}", reply_markup=InlineKeyboardMarkup([[button(f"Refer Link", callback_data="refer")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
 
 async def refer(update, context):
     q=update.callback_query; await q.answer(); me=await context.bot.get_me(); link=f"https://t.me/{me.username}?start={q.from_user.id}"; await q.edit_message_text(f"{BLUE} Aapka unique referral link:\n\n{link}\n\nDost ko link bhejein. Referral tab count hoga jab wo 4 Telegram communities join karke verify kare.\n\nCurrent points: {user_refs(q.from_user.id)}", reply_markup=InlineKeyboardMarkup([[button("⬅️ Home", callback_data="home")]]))
@@ -249,7 +254,7 @@ async def panel_action(update, context):
     if action in {"add_category","remove_category"} and allowed(uid,"category"):
         if action=="add_category": context.user_data["state"]=ADD_CATEGORY; await q.edit_message_text("Category ka naam bhejein:")
         else:
-            rows=[[button(f"{RED} {x['name']}", callback_data=f"rmcat:{x['id']}")] for x in categories()]; await q.edit_message_text("Remove karne wali category select karein:", reply_markup=InlineKeyboardMarkup(rows))
+            rows=[[button(f"{x['name']}", callback_data=f"rmcat:{x['id']}")] for x in categories()]; await q.edit_message_text("Remove karne wali category select karein:", reply_markup=InlineKeyboardMarkup(rows))
     elif action in {"add_file","delete_file"} and allowed(uid,"file"):
         if action=="add_file":
             rows=[[button(x['name'], callback_data=f"newfilecat:{x['id']}")] for x in categories()]; context.user_data["state"]=ADD_FILE; await q.edit_message_text("File kis category mein add karni hai?", reply_markup=InlineKeyboardMarkup(rows))
