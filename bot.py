@@ -32,7 +32,10 @@ BOT_TOKEN = str(CONFIG.get("bot_token", "")).strip()
 OWNER_ID = int(CONFIG.get("owner_id", 0) or 0)
 
 
-DB_PATH = ":memory:"
+DB_PATH = str(CONFIG.get("state_db", Path(__file__).with_name("state.db")))
+if not os.path.isabs(DB_PATH):
+    DB_PATH = str(Path(__file__).with_name(DB_PATH))
+Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 MEMORY_CONNECTION = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
 MEMORY_CONNECTION.row_factory = sqlite3.Row
 MEMORY_CONNECTION.execute("PRAGMA foreign_keys = ON")
