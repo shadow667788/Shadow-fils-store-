@@ -8,6 +8,7 @@ import sys
 import sqlite3
 import urllib.request
 import urllib.error
+import threading
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
@@ -44,7 +45,7 @@ WA_NAME = str(CONFIG.get("whatsapp_channel", {}).get("name", "WhatsApp Channel")
 BANNER_URL = str(CONFIG.get("banner_url", "")).strip()
 OWNER_CONTACT_URL = str(CONFIG.get("owner_contact_url", "")).strip()
 GITHUB_CONFIG = CONFIG.get("github", {})
-GITHUB_TOKEN = str(GITHUB_CONFIG.get("token", "")).strip() or os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_TOKEN = (str(GITHUB_CONFIG.get("token", "")).strip() or os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GITHUB_PAT", "").strip() or os.getenv("GH_TOKEN", "").strip() or os.getenv("GITHUB_ACCESS_TOKEN", "").strip())
 REQUIRED = CONFIG.get("required", [])
 CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
 GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
@@ -133,6 +134,8 @@ LAST_SYNC_ERROR = None
 SYNC_PAUSED_UNTIL = 0.0
 SYNC_FAILURE_NOTIFIED = False
 SYNC_COOLDOWN_SECONDS = 3600
+STATE_SYNC_LOCK = threading.RLock()
+RESTORE_FAILED = False
 
 
 def state_payload():
@@ -152,26 +155,34 @@ def github_request(method, url, token, data=None):
 
 
 def github_state_sync():
-    token = GITHUB_TOKEN
-    repo = str(GITHUB_CONFIG.get("repo", "")).strip()
-    state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
-    if not token or not repo: return
-    api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
-    encoded = base64.b64encode(json.dumps(state_payload(), ensure_ascii=False).encode()).decode()
-    current = None
-    try: current = github_request("GET", api, token)
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404: raise
-    body = {"message": "Update bot state", "content": encoded}
-    if current and current.get("sha"): body["sha"] = current["sha"]
-    github_request("PUT", api, token, body)
+    with STATE_SYNC_LOCK:
+        token = GITHUB_TOKEN
+        repo = str(GITHUB_CONFIG.get("repo", "")).strip() or os.getenv("GITHUB_REPO", "").strip()
+        state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
+        if not token or not repo: return
+        api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
+        payload = state_payload()
+        payload["_meta"] = {"schema": 1, "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        encoded = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
+        for attempt in range(2):
+            current = None
+            try: current = github_request("GET", api, token)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404: raise
+            body = {"message": "Update bot state", "content": encoded}
+            if current and current.get("sha"): body["sha"] = current["sha"]
+            try:
+                github_request("PUT", api, token, body)
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code not in {409, 422} or attempt == 1: raise
 
 
 def github_state_restore():
     token = GITHUB_TOKEN
     repo = str(GITHUB_CONFIG.get("repo", "")).strip()
     state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
-    if not token or not repo: return
+    if not token or not repo: return None
     api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
     try:
         raw = github_request("GET", api, token)
@@ -184,14 +195,25 @@ def github_state_restore():
                 placeholders = ",".join("?" for _ in columns)
                 c.executemany(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({placeholders})", [[row.get(col) for col in columns] for row in rows])
             c.commit()
+        return True
     except urllib.error.HTTPError as exc:
-        if exc.code != 404: log.warning("GitHub state restore failed: %s", exc)
+        if exc.code == 404: return None
+        log.warning("GitHub state restore failed: %s", exc)
+        return False
     except Exception as exc:
         log.warning("GitHub state restore failed: %s", exc)
+        return False
 
 
 async def periodic_state_sync(context):
-    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED
+    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED, RESTORE_FAILED
+    if RESTORE_FAILED:
+        restored = await asyncio.to_thread(github_state_restore)
+        if restored is True:
+            RESTORE_FAILED = False
+            seed_safe_bundles()
+            await asyncio.to_thread(github_state_sync)
+        return
     if time.time() < SYNC_PAUSED_UNTIL:
         if LAST_SYNC_ERROR and not SYNC_FAILURE_NOTIFIED:
             try:
@@ -217,8 +239,10 @@ async def periodic_state_sync(context):
 
 async def save_state_now():
     global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED
+    if RESTORE_FAILED:
+        log.warning("Skipping state write while GitHub restore is unavailable; remote state is protected.")
+        return
     if GITHUB_TOKEN and GITHUB_CONFIG.get("repo"):
-        if time.time() < SYNC_PAUSED_UNTIL: return
         try: await asyncio.to_thread(github_state_sync)
         except Exception as exc:
             LAST_SYNC_ERROR = str(exc)
@@ -461,6 +485,7 @@ async def gate_or_prompt(update, context) -> bool:
     if passed:
         with db() as c:
             c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (uid,)); c.commit()
+        await save_state_now()
         return True
     text = f"Neeche tamam WhatsApp aur Telegram channels/groups join karein, phir Verify karein.\n\n{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
     if update.callback_query:
@@ -483,7 +508,7 @@ def staff_menu(uid):
     return InlineKeyboardMarkup(rows)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user; upsert_user(u)
+    u = update.effective_user; upsert_user(u); await save_state_now()
     if is_banned(u.id):
         await update.effective_message.reply_text("Aapka bot access band hai.")
         return
@@ -507,6 +532,7 @@ async def verify(update, context):
     passed, failed_name = await check_gate(context.bot, q.from_user.id)
     if passed:
         with db() as c: c.execute("UPDATE users SET joined_gate=1 WHERE id=?", (q.from_user.id,)); c.commit()
+        await save_state_now()
         await q.edit_message_text("<b>Verification successful.</b>", parse_mode="HTML")
         await send_dashboard(q.message, context, q.from_user.id)
     else: await q.edit_message_text(f"{RED} Aap ne abhi **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein.", reply_markup=gate_keyboard())
@@ -645,7 +671,7 @@ async def text_handler(update, context):
         with db() as c:
             c.execute("INSERT INTO file_submissions(user_id,username,first_name,file_id,file_type,description) VALUES(?,?,?,?,?,?)", (uid,u.username or "",u.first_name or "",upload[0],upload[1],text)); sid=c.execute("SELECT last_insert_rowid()").fetchone()[0]; c.commit()
             row=c.execute("SELECT * FROM file_submissions WHERE id=?", (sid,)).fetchone()
-        await notify_owner_submission(context, row); context.user_data.clear(); await update.message.reply_text(f"{GREEN} Aapki file owner ko review ke liye bhej di gayi hai. Submission ID: #{sid}", reply_markup=user_menu()); return
+        await save_state_now(); await notify_owner_submission(context, row); context.user_data.clear(); await update.message.reply_text(f"{GREEN} Aapki file owner ko review ke liye bhej di gayi hai. Submission ID: #{sid}", reply_markup=user_menu()); return
     if state == "submission_name" and uid == OWNER_ID:
         if not text: await update.message.reply_text("Name khali nahi ho sakta."); return
         context.user_data["submission_name"] = text; context.user_data["state"] = "submission_refs"
@@ -803,6 +829,7 @@ async def callback_router(update, context):
     if data.startswith("reject:"):
         sid=int(data.split(":")[1])
         with db() as c: row=c.execute("SELECT * FROM file_submissions WHERE id=? AND status='pending'", (sid,)).fetchone(); c.execute("UPDATE file_submissions SET status='rejected' WHERE id=? AND status='pending'", (sid,)); c.commit()
+        await save_state_now()
         if row:
             try: await context.bot.send_message(row["user_id"], "Aapki uploaded file owner ne reject kar di hai.")
             except Exception: pass
@@ -869,9 +896,11 @@ async def callback_router(update, context):
         return
     if data.startswith("rmcat:"):
         with db() as c: c.execute("DELETE FROM categories WHERE id=?",(int(data.split(":")[1]),)); c.commit()
+        await save_state_now()
         await q.edit_message_text(f"{GREEN} Category remove ho gayi.",reply_markup=staff_menu(q.from_user.id)); return
     if data.startswith("rmfile:"):
         with db() as c: c.execute("DELETE FROM files WHERE id=?",(int(data.split(":")[1]),)); c.commit()
+        await save_state_now()
         await q.edit_message_text(f"{GREEN} File delete ho gayi.",reply_markup=staff_menu(q.from_user.id)); return
     return await panel_action(update,context)
 
@@ -945,7 +974,14 @@ def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
     if not str(GITHUB_CONFIG.get("repo", "")).strip() or not GITHUB_TOKEN:
         raise RuntimeError("github.repo aur GITHUB_TOKEN environment variable required hain.")
-    init_db(); github_state_restore(); seed_safe_bundles(); app=Application.builder().token(BOT_TOKEN).build()
+    global RESTORE_FAILED
+    init_db(); restore_status = github_state_restore(); RESTORE_FAILED = restore_status is False; seed_safe_bundles()
+    if GITHUB_TOKEN and GITHUB_CONFIG.get("repo") and restore_status is not False:
+        try: github_state_sync()
+        except Exception as exc: log.warning("Initial GitHub state sync failed: %s", exc)
+    elif restore_status is False:
+        log.error("Skipping initial GitHub state sync because restore failed; remote state is protected from overwrite.")
+    app=Application.builder().token(BOT_TOKEN).build()
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
     app.job_queue.run_once(notify_catalog, when=5)
     app.add_handler(TypeHandler(Update, global_membership_guard), group=-1)
