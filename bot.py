@@ -287,7 +287,7 @@ def category_keyboard():
 
 
 def dashboard_keyboard():
-    rows = [[KeyboardButton("🔗 Refer Link"), KeyboardButton("💰 My Balance")], [KeyboardButton("👤 My Account")]]
+    rows = [[KeyboardButton("📤 Upload Your File")], [KeyboardButton("🔗 Refer Link"), KeyboardButton("💰 My Balance")], [KeyboardButton("👤 My Account")]]
     rows.append([KeyboardButton("💎 Contact Owner to Buy Premium")])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
 
@@ -640,6 +640,9 @@ async def text_handler(update, context):
         with db() as c:
             c.execute("INSERT INTO users(id, username, first_name, banned) VALUES(?, '', '', ?) ON CONFLICT(id) DO UPDATE SET banned=?", (int(text), value, value)); c.commit()
         await save_state_now(); await update.message.reply_text("User status update ho gaya.", reply_markup=staff_menu(uid)); return
+    if state is None and text == "📤 Upload Your File":
+        context.user_data.clear(); context.user_data["state"] = "user_upload"
+        await update.message.reply_text("Apni file, photo, video, URL ya text bhejein. Uske baad description mangi jayegi:"); return
     if state is None and text in {"🔗 Refer Link", "💰 My Balance", "👤 My Account", "💎 Contact Owner to Buy Premium"}:
         if text == "💰 My Balance":
             await update.message.reply_text(f"<b>My Balance:</b> {user_refs(uid)} referrals", parse_mode="HTML"); return
