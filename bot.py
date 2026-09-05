@@ -784,6 +784,7 @@ async def callback_router(update, context):
         if f["file_type"] == "document": await context.bot.send_document(uid, f["file_id"], caption=caption)
         elif f["file_type"] == "photo": await context.bot.send_photo(uid, f["file_id"], caption=caption)
         elif f["file_type"] == "video": await context.bot.send_video(uid, f["file_id"], caption=caption)
+        elif f["file_type"] == "url": await context.bot.send_message(uid, f"{caption}\n\nZIP download ke liye neeche button dabayein.", reply_markup=InlineKeyboardMarkup([[button("Download ZIP", "success", url=f["file_id"])]]))
         else: await context.bot.send_message(uid, f"{caption}\n\n{f['file_id']}")
         return
     if data.startswith("newfilecat:"):
