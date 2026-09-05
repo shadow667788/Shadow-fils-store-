@@ -201,6 +201,7 @@ def init_db():
             created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER NOT NULL,
             name TEXT NOT NULL, file_id TEXT NOT NULL, file_type TEXT NOT NULL, required_refs INTEGER NOT NULL DEFAULT 0,
+            description TEXT NOT NULL DEFAULT '',
             created_by INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, file_id INTEGER, purchased_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -209,6 +210,8 @@ def init_db():
             FOREIGN KEY(inviter_id) REFERENCES users(id), FOREIGN KEY(invitee_id) REFERENCES users(id));
         """)
         try: c.execute("ALTER TABLE users ADD COLUMN premium INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError: pass
+        try: c.execute("ALTER TABLE files ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError: pass
         c.commit()
 
@@ -402,7 +405,7 @@ def user_menu():
 
 def staff_menu(uid):
     role = get_role(uid)
-    rows = [[button(f"Add Category", callback_data="add_category"), button(f"Remove Category", callback_data="remove_category")], [button(f"Add File", callback_data="add_file"), button(f"Delete File", callback_data="delete_file")], [button(f"Add Premium", callback_data="add_premium"), button(f"Remove Premium", callback_data="remove_premium")], [button(f"Broadcast", callback_data="broadcast")]]
+    rows = [[button(f"Add Category", callback_data="add_category"), button(f"Remove Category", callback_data="remove_category")], [button(f"Add File", callback_data="add_file"), button(f"Edit Existing Files", callback_data="edit_files")], [button(f"Delete File", callback_data="delete_file"), button(f"Add Premium", callback_data="add_premium")], [button(f"Remove Premium", callback_data="remove_premium"), button(f"Broadcast", callback_data="broadcast")]]
     if role in {"owner", "partner"}: rows.append([button(f"Add Admin", callback_data="add_admin"), button(f"Remove Admin", callback_data="remove_admin")])
     if role == "owner": rows.extend([[button(f"Manage Partners", callback_data="partners")], [button(f"Ban/Unban User", callback_data="ban")], [button(f"Live Stats", callback_data="stats")]])
     rows.append([button("⬅️ User Panel", callback_data="home")])
@@ -463,10 +466,12 @@ async def show_file(update, context):
     with db() as c:
         f=c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone(); bought=c.execute("SELECT 1 FROM purchases WHERE user_id=? AND file_id=?", (uid,fid)).fetchone()
     if not f: return
+    description = f["description"] or "Is file ki description abhi available nahi hai."
+    details = f"<b>{f['name']}</b>\n\n<b>Description:</b> {description}\n<b>Required referrals:</b> {f['required_refs']}\n<b>Aapke referrals:</b> {user_refs(uid)}\n"
     if bought or is_premium(uid) or user_refs(uid) >= f["required_refs"]:
-        await q.edit_message_text(f"{GREEN} {f['name']} ready hai. Purchase karke file receive karein.", reply_markup=InlineKeyboardMarkup([[button(f"Purchase / Get File", callback_data=f"buy:{fid}")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
+        await q.edit_message_text(f"{GREEN} {details}\nFile unlock karne ke liye neeche button dabayein.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[button(f"Purchase / Get File", callback_data=f"buy:{fid}")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
     else:
-        await q.edit_message_text(f"{RED} Ye file locked hai.\nRequired referrals: {f['required_refs']}\nAapke referrals: {user_refs(uid)}", reply_markup=InlineKeyboardMarkup([[button(f"Refer Link", callback_data="refer")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
+        await q.edit_message_text(f"{RED} {details}\nYe file locked hai. {f['required_refs'] - user_refs(uid)} aur referrals chahiye.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[button(f"Refer Link", callback_data="refer")],[button("⬅️ Files", callback_data=f"cat:{f['category_id']}")]]))
 
 async def refer(update, context):
     q=update.callback_query; await q.answer(); me=await context.bot.get_me(); link=f"https://t.me/{me.username}?start={q.from_user.id}"; await q.edit_message_text(f"{BLUE} Aapka unique referral link:\n\n{link}\n\nDost ko link bhejein. Referral tab count hoga jab wo 4 Telegram communities join karke verify kare.\n\nCurrent points: {user_refs(q.from_user.id)}", reply_markup=InlineKeyboardMarkup([[button("⬅️ Home", callback_data="home")]]))
@@ -482,6 +487,10 @@ async def panel_action(update, context):
         if action=="add_category": context.user_data["state"]=ADD_CATEGORY; await q.edit_message_text("Category ka naam bhejein:")
         else:
             rows=[[button(f"{x['name']}", callback_data=f"rmcat:{x['id']}")] for x in categories()]; await q.edit_message_text("Remove karne wali category select karein:", reply_markup=InlineKeyboardMarkup(rows))
+    elif action == "edit_files" and allowed(uid, "file"):
+        rows=[[button(f"📄 {x['name']}", callback_data=f"editfile:{x['id']}")] for cat in categories() for x in files_for(cat['id'])]
+        rows.append([button("⬅️ Back", callback_data="owner_back")])
+        await q.edit_message_text("Edit Existing Files — file select karein:", reply_markup=InlineKeyboardMarkup(rows))
     elif action in {"add_file","delete_file"} and allowed(uid,"file"):
         if action=="add_file":
             rows=[[button(x['name'], callback_data=f"newfilecat:{x['id']}")] for x in categories()]
@@ -512,8 +521,35 @@ async def panel_action(update, context):
         await q.edit_message_text("Owner Panel", reply_markup=staff_menu(uid))
     else: await q.edit_message_text(f"{RED} Permission denied.", reply_markup=staff_menu(uid))
 
+async def edit_file_menu(update, context):
+    q = update.callback_query; await q.answer(); fid = int(q.data.split(":")[1])
+    with db() as c: f = c.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
+    if not f: return
+    context.user_data["edit_file_id"] = fid
+    await q.edit_message_text(f"<b>{f['name']}</b>\nCurrent description: {f['description'] or 'None'}\nRequired referrals: {f['required_refs']}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([
+        [button("Replace File", callback_data="edit_replace"), button("Rename", callback_data="edit_rename")],
+        [button("Edit Description", callback_data="edit_description"), button("Edit Referral Points", callback_data="edit_refs")],
+        [button("⬅️ Edit Existing Files", callback_data="edit_files")]
+    ]))
+
 async def text_handler(update, context):
     uid=update.effective_user.id; state=context.user_data.get("state"); text=update.message.text.strip()
+    if state in {"edit_name", "edit_description", "edit_refs"}:
+        fid = context.user_data.get("edit_file_id")
+        if state == "edit_refs":
+            try: value = int(text); assert value >= 0
+            except Exception: await update.message.reply_text("Sirf zero ya positive number bhejein."); return
+            column, value = "required_refs", value
+        else:
+            if not text: await update.message.reply_text("Value khali nahi ho sakti."); return
+            column, value = ("name", text) if state == "edit_name" else ("description", text)
+        with db() as c: c.execute(f"UPDATE files SET {column}=? WHERE id=?", (value, fid)); c.commit()
+        context.user_data.clear(); await save_state_now(); await update.message.reply_text(f"{GREEN} File update ho gayi.", reply_markup=staff_menu(uid)); return
+    if state == "edit_file":
+        fid = context.user_data.pop("edit_file_id"); context.user_data.pop("state", None)
+        kind = "url" if text.startswith(("http://", "https://", "tg://")) else "text"
+        with db() as c: c.execute("UPDATE files SET file_id=?, file_type=? WHERE id=?", (text, kind, fid)); c.commit()
+        await save_state_now(); await update.message.reply_text(f"{GREEN} File replace ho gayi.", reply_markup=staff_menu(uid)); return
     # Role/user-management IDs must be handled before upload, referral, or broadcast states.
     if context.user_data.get("role_action") or context.user_data.get("premium_action") or context.user_data.get("ban_action"):
         if not text.isdigit(): await update.message.reply_text("Valid numeric Telegram ID dein."); return
@@ -612,6 +648,7 @@ async def callback_router(update, context):
     if data=="categories": return await show_categories(update,context)
     if data.startswith("cat:"): return await show_files(update,context)
     if data.startswith("file:"): return await show_file(update,context)
+    if data.startswith("editfile:"): return await edit_file_menu(update, context)
     if data=="refer": return await refer(update,context)
     if data=="balance":
         await q.answer(f"Referral Balance: {user_refs(q.from_user.id)}", show_alert=True); return
@@ -645,6 +682,20 @@ async def callback_router(update, context):
         context.user_data["after_category"] = "add_file"
         await q.edit_message_text("New category ka naam bhejein:")
         return
+    if data in {"edit_replace", "edit_rename", "edit_description", "edit_refs"} and allowed(q.from_user.id, "file"):
+        if data == "edit_replace":
+            context.user_data["state"] = "edit_file"
+            await q.edit_message_text("Nayi document, photo, video, URL ya text bhejein:")
+        elif data == "edit_rename":
+            context.user_data["state"] = "edit_name"
+            await q.edit_message_text("Naya display name bhejein:")
+        elif data == "edit_description":
+            context.user_data["state"] = "edit_description"
+            await q.edit_message_text("Nayi short description bhejein:")
+        else:
+            context.user_data["state"] = "edit_refs"
+            await q.edit_message_text("Naye required referral points ka number bhejein:")
+        return
     if data.startswith("rmcat:"):
         with db() as c: c.execute("DELETE FROM categories WHERE id=?",(int(data.split(":")[1]),)); c.commit()
         await q.edit_message_text(f"{GREEN} Category remove ho gayi.",reply_markup=staff_menu(q.from_user.id)); return
@@ -654,16 +705,28 @@ async def callback_router(update, context):
     return await panel_action(update,context)
 
 async def document_handler(update, context):
+    if context.user_data.get("state") == "edit_file":
+        fid = context.user_data.pop("edit_file_id"); context.user_data.pop("state", None)
+        with db() as c: c.execute("UPDATE files SET file_id=?, file_type=? WHERE id=?", (update.message.document.file_id, "document", fid)); c.commit()
+        await save_state_now(); await update.message.reply_text(f"{GREEN} File replace ho gayi.", reply_markup=staff_menu(update.effective_user.id)); return
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.document.file_id, "document"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("File ka display name bhejein:")
 
 
 async def photo_handler(update, context):
+    if context.user_data.get("state") == "edit_file":
+        fid = context.user_data.pop("edit_file_id"); context.user_data.pop("state", None)
+        with db() as c: c.execute("UPDATE files SET file_id=?, file_type=? WHERE id=?", (update.message.photo[-1].file_id, "photo", fid)); c.commit()
+        await save_state_now(); await update.message.reply_text(f"{GREEN} File replace ho gayi.", reply_markup=staff_menu(update.effective_user.id)); return
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.photo[-1].file_id, "photo"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("Photo ka display name bhejein:")
 
 
 async def video_handler(update, context):
+    if context.user_data.get("state") == "edit_file":
+        fid = context.user_data.pop("edit_file_id"); context.user_data.pop("state", None)
+        with db() as c: c.execute("UPDATE files SET file_id=?, file_type=? WHERE id=?", (update.message.video.file_id, "video", fid)); c.commit()
+        await save_state_now(); await update.message.reply_text(f"{GREEN} File replace ho gayi.", reply_markup=staff_menu(update.effective_user.id)); return
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.video.file_id, "video"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("Video ka display name bhejein:")
 
@@ -679,9 +742,17 @@ async def refs_handler(update, context):
     if context.user_data.get("state") != "refs": return await name_handler(update,context)
     try: refs=int(update.message.text.strip()); assert refs>=0
     except Exception: await update.message.reply_text("Sirf positive number bhejein."); return
-    fid,typ=context.user_data["upload"]; name=context.user_data["file_name"]; cid=context.user_data["file_category"]; uid=update.effective_user.id
+    context.user_data["file_refs"] = refs
+    context.user_data["state"] = "file_description"
+    await update.message.reply_text("Ab is file ki short description bhejein (user ko file button dabane par nazar aayegi):")
+
+async def description_handler(update, context):
+    if context.user_data.get("state") != "file_description": return await text_handler(update, context)
+    description = update.message.text.strip()
+    if not description: await update.message.reply_text("Description khali nahi ho sakti."); return
+    fid,typ=context.user_data["upload"]; name=context.user_data["file_name"]; cid=context.user_data["file_category"]; refs=context.user_data["file_refs"]; uid=update.effective_user.id
     with db() as c:
-        c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,created_by) VALUES(?,?,?,?,?,?)",(cid,name,fid,typ,refs,uid)); c.commit()
+        c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,description,created_by) VALUES(?,?,?,?,?,?,?)",(cid,name,fid,typ,refs,description,uid)); c.commit()
         users=c.execute("SELECT id FROM users WHERE banned=0").fetchall()
     for user in users:
         try: await context.bot.send_message(user["id"], f"{GREEN} New file add hui hai: {name}\\nRequired referrals: {refs}")
@@ -702,6 +773,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL,document_handler))
     app.add_handler(MessageHandler(filters.PHOTO,photo_handler))
     app.add_handler(MessageHandler(filters.VIDEO,video_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, description_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^\d+$") & ~filters.COMMAND, refs_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, name_handler))
     app.add_error_handler(on_error); log.info("Shadow Files Store started"); app.run_polling(allowed_updates=Update.ALL_TYPES)
