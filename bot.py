@@ -340,6 +340,8 @@ async def check_gate(bot, uid: int):
 
 async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Re-check all required communities before every user interaction."""
+    if update.effective_chat and update.effective_chat.type != "private":
+        raise ApplicationHandlerStop
     user = update.effective_user
     if not user:
         return
@@ -350,7 +352,7 @@ async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_
     passed, failed_name = await check_gate(context.bot, user.id)
     if passed:
         return
-    message = f"Aapka access block hai. Aap ne **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
+    message = f"Aap ne **{failed_name}** leave kar diya hai. Aapka access block kar diya gaya hai. Isay dobara join karein, phir Verify karein."
     if query:
         await query.answer("Membership incomplete", show_alert=True)
         await query.edit_message_text(message, reply_markup=gate_keyboard())
@@ -360,6 +362,8 @@ async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def enforce_membership(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if update.effective_chat and update.effective_chat.type != "private":
+        return False
     query = update.callback_query
     if query and query.data == "verify_gate":
         return True
@@ -369,7 +373,7 @@ async def enforce_membership(update: Update, context: ContextTypes.DEFAULT_TYPE)
     passed, failed_name = await check_gate(context.bot, user.id)
     if passed:
         return True
-    message = f"Aapka access block hai. Aap ne **{failed_name}** join nahi kiya. Isay join karein, phir Verify karein."
+    message = f"Aap ne **{failed_name}** leave kar diya hai. Aapka access block kar diya gaya hai. Isay dobara join karein, phir Verify karein."
     if query:
         await query.answer("Membership incomplete", show_alert=True)
         await query.edit_message_text(message, reply_markup=gate_keyboard())
