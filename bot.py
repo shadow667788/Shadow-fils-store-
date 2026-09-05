@@ -46,10 +46,40 @@ REQUIRED = CONFIG.get("required", [])
 CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
 GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
 SAFE_BUNDLES = [
-    ("MD Bots", "MD Bots — Safe Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/PWSNWJrFnSgWHkHz.zip", "Open-source MD bot sources. Review permissions, terms and anti-spam behavior before deployment.", 10),
-    ("Defensive Security & Code Audit", "Defensive Security Tools — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/mAZNTvXkcMeDImug.zip", "Authorized defensive scanners and code-audit sources. Use only on systems and applications you own or are authorized to test.", 15),
-    ("OSINT & Reconnaissance", "OSINT & Reconnaissance — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/sBFazjKxgTSwrlxJ.zip", "Lawful OSINT and reconnaissance sources for consent-based investigations and owned domains.", 15),
-    ("Android Reverse Engineering & Development", "Android Reverse Engineering — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/qMtyYPnihsfyeylJ.zip", "Android analysis and reverse-engineering sources for apps you own or have permission to inspect.", 15),
+    ('MD Bots', 'Silva MD Bot', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/awiWIbvZvnnwgoeD.zip', '1500+ commands, AI agent, anti-spam controls, auto-status, games and themes.', 10),
+    ('MD Bots', 'MEGA-MD', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/tZdGltcSluHRFODT.zip', '250+ commands, multiple storage backends, group protection and AI chatbot features.', 10),
+    ('MD Bots', 'Knightbot-MD', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/tHgDZrnWMYaROxGp.zip', 'Group management, tag-all, TTS, stickers, anti-link and warning system.', 5),
+    ('MD Bots', 'ShadowBot-MD', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/BSxgwIEHLICImWoB.zip', 'Multi-device support with Termux and Heroku deployment support.', 5),
+    ('MD Bots', 'WhatsAppBotMultiDevice', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/BsvHKeuHcKGXtPpg.zip', 'React dashboard, MongoDB support, utility commands and group management.', 10),
+    ('Defensive Security & Code Audit', 'Dalfox', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/NOSXfDKHlcNYmmta.zip', 'Context-aware XSS scanning and parameter analysis for authorized applications.', 10),
+    ('Defensive Security & Code Audit', 'Katana', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/pyanIxBvMnSEixCd.zip', 'JavaScript-aware web crawling and endpoint discovery for owned targets.', 10),
+    ('Defensive Security & Code Audit', 'Nuclei', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/DReXzYhSoLDKCrfI.zip', 'Fast template-based vulnerability scanning with a large YAML template ecosystem.', 15),
+    ('Defensive Security & Code Audit', 'httpx', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/ChiSTbyPDjbfJloF.zip', 'HTTP probing, technology and CDN detection, and fingerprinting for authorized inventories.', 10),
+    ('Defensive Security & Code Audit', 'Subfinder', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/JzHggqxyMMhPQAaI.zip', 'Fast passive subdomain enumeration for domains you own or are authorized to assess.', 10),
+    ('Defensive Security & Code Audit', 'Amass', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/gUqZRVCudeTUYyYU.zip', 'Attack-surface mapping and asset discovery for authorized security assessments.', 15),
+    ('Defensive Security & Code Audit', 'TruffleHog', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/JcEMQaiYpBESFXTI.zip', 'Secret detection and Git repository scanning for authorized codebases.', 10),
+    ('Defensive Security & Code Audit', 'Gobuster', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/bnFjdbESBSQIdRry.zip', 'Directory, file, DNS and virtual-host discovery for authorized environments.', 5),
+    ('Defensive Security & Code Audit', 'ffuf', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/TXXgVKOYjfxMjmPh.zip', 'Fast multi-threaded web fuzzing for authorized testing only.', 10),
+    ('Defensive Security & Code Audit', 'Nikto', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/LMpcNgKpOewECMWM.zip', 'Web-server security checks for systems you own or are authorized to test.', 5),
+    ('Defensive Security & Code Audit', 'Dirsearch', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/JOVQPoCiFXORsUCE.zip', 'Web-path discovery for authorized target inventories.', 5),
+    ('Defensive Security & Code Audit', 'WhatWeb', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/QVqqQHOEBnyJIjck.zip', 'Web technology identification and fingerprinting for authorized analysis.', 5),
+    ('OSINT & Reconnaissance', 'theHarvester', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/epqWlthrOIHgKEzf.zip', 'Collects public emails, names, subdomains, IPs and URLs for lawful investigations.', 10),
+    ('OSINT & Reconnaissance', 'SpiderFoot', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/QQwHcTvSnrvCbaCm.zip', 'Automated OSINT collection with a broad module ecosystem.', 15),
+    ('OSINT & Reconnaissance', 'Recon-ng', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/IsATdqvdWbwRPYno.zip', 'Full-featured reconnaissance framework for authorized investigations.', 10),
+    ('OSINT & Reconnaissance', 'Photon', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/soOGjwsepHIuuaRc.zip', 'Fast crawler for authorized website and OSINT analysis.', 5),
+    ('OSINT & Reconnaissance', 'Waybackurls', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/oXyPRChRjQDWcPGq.zip', 'Fetches archived URLs from the Wayback Machine for owned domains.', 5),
+    ('OSINT & Reconnaissance', 'gau (GetAllUrls)', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/PxzOgpqfcIuldlwG.zip', 'Collects URLs from multiple public sources for authorized analysis.', 5),
+    ('OSINT & Reconnaissance', 'Arjun', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/pMUvHTMZNojIWbdy.zip', 'HTTP parameter discovery for authorized applications.', 10),
+    ('OSINT & Reconnaissance', 'ParamSpider', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/MBftDXbWjlCfngkE.zip', 'Parameter mining from web archives for authorized domains.', 5),
+    ('OSINT & Reconnaissance', 'web-check', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/qoeNKTySIICZchnK.zip', 'All-in-one website analysis dashboard.', 10),
+    ('OSINT & Reconnaissance', 'Sherlock', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/jhWfRcpnRFUzJoBK.zip', 'Username search across public sites; respect privacy and platform rules.', 10),
+    ('OSINT & Reconnaissance', 'Holehe', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/ntsWxpyKsAimHDRU.zip', 'Public email-usage checks; use only with consent and lawful purpose.', 10),
+    ('OSINT & Reconnaissance', 'Instaloader', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/CjFDdrRoKeFPcfGG.zip', 'Downloads public Instagram data within platform rules.', 5),
+    ('OSINT & Reconnaissance', 'Tweepy', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/edxrkYzlkgUdVpzW.zip', 'Twitter/X API client for compliant data access.', 5),
+    ('Android Reverse Engineering & Development', 'APKTool', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/jrrWTsmuFwxhlBFu.zip', 'APK decoding and rebuilding for apps you own or have permission to inspect.', 10),
+    ('Android Reverse Engineering & Development', 'JADX', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/vepyureogDHzkoPi.zip', 'DEX-to-Java decompilation for authorized analysis.', 10),
+    ('Android Reverse Engineering & Development', 'dex2jar', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/QLxerOtIcZWMelEN.zip', 'DEX-to-JAR conversion for authorized analysis.', 5),
+    ('Android Reverse Engineering & Development', 'Ghidra', 'https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/awnEAzjEYvWICBcy.zip', 'Native binary reverse-engineering suite for lawful analysis.', 15),
 ]
 NEW_CATALOG_ITEMS = []
 
@@ -231,6 +261,9 @@ def seed_safe_bundles():
     global NEW_CATALOG_ITEMS
     added = []
     with db() as c:
+        old_names = ["MD Bots — Safe Source Bundle", "Defensive Security Tools — Source Bundle", "OSINT & Reconnaissance — Source Bundle", "Android Reverse Engineering — Source Bundle"]
+        for old_name in old_names:
+            c.execute("DELETE FROM files WHERE name=?", (old_name,))
         for category_name, file_name, url, description, refs in SAFE_BUNDLES:
             c.execute("INSERT OR IGNORE INTO categories(name, created_by) VALUES(?, ?)", (category_name, OWNER_ID))
             category_id = c.execute("SELECT id FROM categories WHERE name=?", (category_name,)).fetchone()["id"]
@@ -525,12 +558,21 @@ async def pending_files(update, context):
     buttons.append([button("⬅️ Owner Panel", callback_data="owner_back")])
     await q.edit_message_text("Pending user files:\n\n" + ("Select a submission:" if rows else "Koi pending file nahi hai."), reply_markup=InlineKeyboardMarkup(buttons))
 
+async def send_submission_preview(context, row):
+    caption = f"Pending File #{row['id']} — owner review preview\n\n{row['description']}"
+    if row["file_type"] == "document": await context.bot.send_document(OWNER_ID, row["file_id"], caption=caption)
+    elif row["file_type"] == "photo": await context.bot.send_photo(OWNER_ID, row["file_id"], caption=caption)
+    elif row["file_type"] == "video": await context.bot.send_video(OWNER_ID, row["file_id"], caption=caption)
+    elif row["file_type"] == "url": await context.bot.send_message(OWNER_ID, f"{caption}\n\nLink: {row['file_id']}", reply_markup=InlineKeyboardMarkup([[button("Open Submitted Link", "primary", url=row["file_id"])]]))
+    else: await context.bot.send_message(OWNER_ID, f"{caption}\n\nSubmitted text:\n{row['file_id']}")
+
 async def pending_detail(update, context):
     q = update.callback_query; await q.answer(); sid = int(q.data.split(":")[1])
     with db() as c: row = c.execute("SELECT * FROM file_submissions WHERE id=? AND status='pending'", (sid,)).fetchone()
     if not row: await q.edit_message_text("Ye submission already process ho chuki hai.", reply_markup=staff_menu(OWNER_ID)); return
     context.user_data["submission_id"] = sid
     text = f"<b>Pending File #{sid}</b>\n\n<b>User:</b> {row['first_name'] or '-'} (@{row['username'] or '-'})\n<b>User ID:</b> <code>{row['user_id']}</code>\n<b>Type:</b> {row['file_type']}\n<b>Description:</b> {row['description']}"
+    await send_submission_preview(context, row)
     await q.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[button("Accept", "success", callback_data=f"accept:{sid}"), button("Reject", "danger", callback_data=f"reject:{sid}")], [button("⬅️ Pending Files", callback_data="pending_files")]]))
 
 async def notify_owner_submission(context, row):
@@ -601,13 +643,23 @@ async def text_handler(update, context):
             c.execute("INSERT INTO file_submissions(user_id,username,first_name,file_id,file_type,description) VALUES(?,?,?,?,?,?)", (uid,u.username or "",u.first_name or "",upload[0],upload[1],text)); sid=c.execute("SELECT last_insert_rowid()").fetchone()[0]; c.commit()
             row=c.execute("SELECT * FROM file_submissions WHERE id=?", (sid,)).fetchone()
         await notify_owner_submission(context, row); context.user_data.clear(); await update.message.reply_text(f"{GREEN} Aapki file owner ko review ke liye bhej di gayi hai. Submission ID: #{sid}", reply_markup=user_menu()); return
+    if state == "submission_name" and uid == OWNER_ID:
+        if not text: await update.message.reply_text("Name khali nahi ho sakta."); return
+        context.user_data["submission_name"] = text; context.user_data["state"] = "submission_refs"
+        await update.message.reply_text("Ab is file ke required referral points ka number bhejein:"); return
     if state == "submission_newcat" and uid == OWNER_ID:
         with db() as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)", (text,uid)); cid=c.execute("SELECT id FROM categories WHERE name=?", (text,)).fetchone()[0]; c.commit()
         context.user_data["submission_category"] = cid; context.user_data["state"] = "submission_refs"; await update.message.reply_text("Category ban gayi. Required referral points ka number bhejein:"); return
     if state == "submission_refs" and uid == OWNER_ID:
         try: refs=int(text); assert refs>=0
         except Exception: await update.message.reply_text("Sirf zero ya positive number bhejein."); return
-        context.user_data["submission_refs"] = refs; context.user_data["state"] = "submission_description"; await update.message.reply_text("Description change karni hai? Nayi description bhejein, ya '-' likhein original rakhne ke liye:"); return
+        context.user_data["submission_refs"] = refs
+        if "submission_category" not in context.user_data:
+            rows=[[button(x["name"], callback_data=f"subcat:{x['id']}")] for x in categories()]
+            rows.append([button("Add New Category", "success", callback_data="subnewcat")])
+            context.user_data["state"] = "submission_category"
+            await update.message.reply_text("Ab category select karein:", reply_markup=InlineKeyboardMarkup(rows)); return
+        context.user_data["state"] = "submission_description"; await update.message.reply_text("Description change karni hai? Nayi description bhejein, ya '-' likhein original rakhne ke liye:"); return
     if state == "submission_description" and uid == OWNER_ID:
         context.user_data["submission_description"] = "" if text == "-" else text; context.user_data["state"] = "submission_reward"
         await update.message.reply_text("Ab uploader ko kitne referral points reward dene hain? Number bhejein:"); return
@@ -619,7 +671,7 @@ async def text_handler(update, context):
             row=c.execute("SELECT * FROM file_submissions WHERE id=? AND status='pending'", (sid,)).fetchone()
             if not row: context.user_data.clear(); await update.message.reply_text("Submission nahi mili ya already process ho chuki hai.", reply_markup=staff_menu(uid)); return
             desc=context.user_data.get("submission_description") or row["description"]
-            c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,description,created_by) VALUES(?,?,?,?,?,?,?)", (cat, f"User Upload #{sid}", row["file_id"], row["file_type"], refs, desc, uid))
+            c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,description,created_by) VALUES(?,?,?,?,?,?,?)", (cat, context.user_data.get("submission_name") or f"User Upload #{sid}", row["file_id"], row["file_type"], refs, desc, uid))
             c.execute("UPDATE file_submissions SET status='approved' WHERE id=?", (sid,)); c.execute("UPDATE users SET referrals=referrals+? WHERE id=?", (reward,row["user_id"])); c.commit()
         await save_state_now()
         try: await context.bot.send_message(row["user_id"], f"{GREEN} Aapki file owner ne accept kar li hai. Aapko {reward} referral points reward mile hain.")
@@ -753,13 +805,11 @@ async def callback_router(update, context):
             except Exception: pass
         await q.answer("Rejected"); return await pending_files(update, context)
     if data.startswith("accept:") and q.from_user.id == OWNER_ID:
-        sid=int(data.split(":")[1]); context.user_data["submission_id"] = sid
-        rows=[[button(x["name"], callback_data=f"subcat:{x['id']}")] for x in categories()]
-        rows.append([button("Add New Category", "success", callback_data="subnewcat")])
-        await q.answer(); await q.edit_message_text("File ko kis category mein add karna hai?", reply_markup=InlineKeyboardMarkup(rows)); return
+        sid=int(data.split(":")[1]); context.user_data.clear(); context.user_data["submission_id"] = sid; context.user_data["state"] = "submission_name"
+        await q.answer(); await q.edit_message_text("Accept ho gayi. Is file ka naya display name bhejein:"); return
     if data.startswith("subcat:") and q.from_user.id == OWNER_ID:
-        context.user_data["submission_category"] = int(data.split(":")[1]); context.user_data["state"] = "submission_refs"
-        await q.answer(); await q.edit_message_text("Is file ke liye required referral points ka number bhejein:"); return
+        context.user_data["submission_category"] = int(data.split(":")[1]); context.user_data["state"] = "submission_description"
+        await q.answer(); await q.edit_message_text("Description change karni hai? Nayi description bhejein, ya '-' likhein original rakhne ke liye:"); return
     if data == "subnewcat" and q.from_user.id == OWNER_ID:
         context.user_data["state"] = "submission_newcat"; await q.answer(); await q.edit_message_text("New category ka naam bhejein:"); return
     if data=="categories": return await show_categories(update,context)
