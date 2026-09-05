@@ -747,7 +747,10 @@ async def refs_handler(update, context):
     await update.message.reply_text("Ab is file ki short description bhejein (user ko file button dabane par nazar aayegi):")
 
 async def description_handler(update, context):
-    if context.user_data.get("state") != "file_description": return await text_handler(update, context)
+    state = context.user_data.get("state")
+    if state != "file_description":
+        if state == "refs": return await refs_handler(update, context)
+        return await name_handler(update, context)
     description = update.message.text.strip()
     if not description: await update.message.reply_text("Description khali nahi ho sakti."); return
     fid,typ=context.user_data["upload"]; name=context.user_data["file_name"]; cid=context.user_data["file_category"]; refs=context.user_data["file_refs"]; uid=update.effective_user.id
