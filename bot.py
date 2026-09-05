@@ -630,9 +630,15 @@ async def callback_router(update, context):
                 c.execute("UPDATE users SET referrals=referrals-? WHERE id=?", (f["required_refs"], uid))
             c.commit()
         await save_state_now()
-        await q.answer("File unlock ho gayi!"); await context.bot.send_document(uid, f["file_id"], caption=f"{GREEN} {f['name']}"); return
+        await q.answer("Content unlock ho gaya!")
+        caption = f"{GREEN} {f['name']}"
+        if f["file_type"] == "document": await context.bot.send_document(uid, f["file_id"], caption=caption)
+        elif f["file_type"] == "photo": await context.bot.send_photo(uid, f["file_id"], caption=caption)
+        elif f["file_type"] == "video": await context.bot.send_video(uid, f["file_id"], caption=caption)
+        else: await context.bot.send_message(uid, f"{caption}\n\n{f['file_id']}")
+        return
     if data.startswith("newfilecat:"):
-        context.user_data["file_category"]=int(data.split(":")[1]); context.user_data["state"]=SET_FILE_NAME; await q.edit_message_text("Ab file upload karein (document):")
+        context.user_data["file_category"]=int(data.split(":")[1]); context.user_data["state"]=SET_FILE_NAME; await q.edit_message_text("Ab document, photo, video, URL ya text message bhejein:")
         return
     if data == "addfile_newcat":
         context.user_data["state"] = ADD_CATEGORY
@@ -651,12 +657,26 @@ async def document_handler(update, context):
     if context.user_data.get("state") != SET_FILE_NAME: return
     context.user_data["upload"]=(update.message.document.file_id, "document"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("File ka display name bhejein:")
 
+
+async def photo_handler(update, context):
+    if context.user_data.get("state") != SET_FILE_NAME: return
+    context.user_data["upload"]=(update.message.photo[-1].file_id, "photo"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("Photo ka display name bhejein:")
+
+
+async def video_handler(update, context):
+    if context.user_data.get("state") != SET_FILE_NAME: return
+    context.user_data["upload"]=(update.message.video.file_id, "video"); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("Video ka display name bhejein:")
+
 async def name_handler(update, context):
+    if context.user_data.get("state") == SET_FILE_NAME:
+        value = update.message.text.strip()
+        kind = "url" if value.startswith(("http://", "https://", "tg://")) else "text"
+        context.user_data["upload"]=(value, kind); context.user_data["state"]=SET_FILE_REFS; await update.message.reply_text("Is content ka display name bhejein:"); return
     if context.user_data.get("state") != SET_FILE_REFS: return await text_handler(update,context)
     context.user_data["file_name"]=update.message.text.strip(); context.user_data["state"]="refs"; await update.message.reply_text("Unlock ke liye kitne referrals required hain? Number bhejein:")
 
 async def refs_handler(update, context):
-    if context.user_data.get("state") != "refs": return await text_handler(update,context)
+    if context.user_data.get("state") != "refs": return await name_handler(update,context)
     try: refs=int(update.message.text.strip()); assert refs>=0
     except Exception: await update.message.reply_text("Sirf positive number bhejein."); return
     fid,typ=context.user_data["upload"]; name=context.user_data["file_name"]; cid=context.user_data["file_category"]; uid=update.effective_user.id
@@ -680,6 +700,8 @@ def main():
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.Document.ALL,document_handler))
+    app.add_handler(MessageHandler(filters.PHOTO,photo_handler))
+    app.add_handler(MessageHandler(filters.VIDEO,video_handler))
     app.add_handler(MessageHandler(filters.Regex(r"^\d+$") & ~filters.COMMAND, refs_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, name_handler))
     app.add_error_handler(on_error); log.info("Shadow Files Store started"); app.run_polling(allowed_updates=Update.ALL_TYPES)
