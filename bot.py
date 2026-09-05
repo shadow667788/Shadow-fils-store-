@@ -243,7 +243,12 @@ def seed_safe_bundles():
 
 async def notify_catalog(context):
     if NEW_CATALOG_ITEMS:
-        await context.bot.send_message(OWNER_ID, "Safe tool bundles owner ne add kar diye hain:\n\n" + "\n".join(f"• {name}" for name in NEW_CATALOG_ITEMS) + "\n\nCategories mein available hain. Sirf authorized/legal use karein.")
+        message = "New safe tool bundles owner ne add kiye hain:\n\n" + "\n".join(f"• {name}" for name in NEW_CATALOG_ITEMS) + "\n\nCategories mein available hain. Download ke liye referral points required hain. Sirf authorized/legal use karein."
+        await context.bot.send_message(OWNER_ID, message)
+        with db() as c: users = c.execute("SELECT id FROM users WHERE banned=0 AND id!=?", (OWNER_ID,)).fetchall()
+        for user in users:
+            try: await context.bot.send_message(user["id"], message)
+            except Exception: pass
 
 
 def upsert_user(u):
