@@ -45,6 +45,13 @@ GITHUB_TOKEN = str(GITHUB_CONFIG.get("token", "")).strip() or os.getenv("GITHUB_
 REQUIRED = CONFIG.get("required", [])
 CHANNELS = [x for x in REQUIRED if x.get("type") == "channel"]
 GROUPS = [x for x in REQUIRED if x.get("type") == "group"]
+SAFE_BUNDLES = [
+    ("MD Bots", "MD Bots — Safe Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/PWSNWJrFnSgWHkHz.zip", "Open-source MD bot sources. Review permissions, terms and anti-spam behavior before deployment.", 10),
+    ("Defensive Security & Code Audit", "Defensive Security Tools — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/mAZNTvXkcMeDImug.zip", "Authorized defensive scanners and code-audit sources. Use only on systems and applications you own or are authorized to test.", 15),
+    ("OSINT & Reconnaissance", "OSINT & Reconnaissance — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/sBFazjKxgTSwrlxJ.zip", "Lawful OSINT and reconnaissance sources for consent-based investigations and owned domains.", 15),
+    ("Android Reverse Engineering & Development", "Android Reverse Engineering — Source Bundle", "https://files.manuscdn.com/user_upload_by_module/session_file/310519663942076129/qMtyYPnihsfyeylJ.zip", "Android analysis and reverse-engineering sources for apps you own or have permission to inspect.", 15),
+]
+NEW_CATALOG_ITEMS = []
 
 ADD_CATEGORY, ADD_FILE, SET_FILE_NAME, SET_FILE_REFS, BROADCAST = range(5)
 
@@ -219,6 +226,24 @@ def init_db():
         try: c.execute("ALTER TABLE files ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError: pass
         c.commit()
+
+def seed_safe_bundles():
+    global NEW_CATALOG_ITEMS
+    added = []
+    with db() as c:
+        for category_name, file_name, url, description, refs in SAFE_BUNDLES:
+            c.execute("INSERT OR IGNORE INTO categories(name, created_by) VALUES(?, ?)", (category_name, OWNER_ID))
+            category_id = c.execute("SELECT id FROM categories WHERE name=?", (category_name,)).fetchone()["id"]
+            if not c.execute("SELECT 1 FROM files WHERE name=?", (file_name,)).fetchone():
+                c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,description,created_by) VALUES(?,?,?,?,?,?,?)", (category_id, file_name, url, "url", refs, description, OWNER_ID))
+                added.append(file_name)
+        c.commit()
+    NEW_CATALOG_ITEMS = added
+    return added
+
+async def notify_catalog(context):
+    if NEW_CATALOG_ITEMS:
+        await context.bot.send_message(OWNER_ID, "Safe tool bundles owner ne add kar diye hain:\n\n" + "\n".join(f"• {name}" for name in NEW_CATALOG_ITEMS) + "\n\nCategories mein available hain. Sirf authorized/legal use karein.")
 
 
 def upsert_user(u):
@@ -861,8 +886,9 @@ def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
     if not str(GITHUB_CONFIG.get("repo", "")).strip() or not GITHUB_TOKEN:
         raise RuntimeError("github.repo aur GITHUB_TOKEN environment variable required hain.")
-    init_db(); github_state_restore(); app=Application.builder().token(BOT_TOKEN).build()
+    init_db(); github_state_restore(); seed_safe_bundles(); app=Application.builder().token(BOT_TOKEN).build()
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
+    app.job_queue.run_once(notify_catalog, when=5)
     app.add_handler(TypeHandler(Update, global_membership_guard), group=-1)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
