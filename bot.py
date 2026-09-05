@@ -136,6 +136,9 @@ SYNC_FAILURE_NOTIFIED = False
 SYNC_COOLDOWN_SECONDS = 3600
 STATE_SYNC_LOCK = threading.RLock()
 RESTORE_FAILED = False
+RESTORE_ERROR = ""
+RESTORE_RETRY_AT = 0.0
+RESTORE_ALERT_SENT = False
 
 
 def state_payload():
@@ -179,10 +182,13 @@ def github_state_sync():
 
 
 def github_state_restore():
+    global RESTORE_ERROR
     token = GITHUB_TOKEN
-    repo = str(GITHUB_CONFIG.get("repo", "")).strip()
+    repo = str(GITHUB_CONFIG.get("repo", "")).strip() or os.getenv("GITHUB_REPO", "").strip()
     state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
-    if not token or not repo: return None
+    if not token or not repo:
+        RESTORE_ERROR = "GITHUB_TOKEN/GITHUB_PAT is missing" if not token else "GitHub repository is not configured"
+        return False
     api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
     try:
         raw = github_request("GET", api, token)
@@ -195,24 +201,40 @@ def github_state_restore():
                 placeholders = ",".join("?" for _ in columns)
                 c.executemany(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({placeholders})", [[row.get(col) for col in columns] for row in rows])
             c.commit()
+        RESTORE_ERROR = ""
         return True
     except urllib.error.HTTPError as exc:
-        if exc.code == 404: return None
+        RESTORE_ERROR = f"HTTP {exc.code}: {exc.reason}"
         log.warning("GitHub state restore failed: %s", exc)
         return False
     except Exception as exc:
+        RESTORE_ERROR = str(exc)
         log.warning("GitHub state restore failed: %s", exc)
         return False
 
 
 async def periodic_state_sync(context):
-    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED, RESTORE_FAILED
+    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED, RESTORE_FAILED, RESTORE_ERROR, RESTORE_RETRY_AT, RESTORE_ALERT_SENT
     if RESTORE_FAILED:
+        if time.time() < RESTORE_RETRY_AT:
+            return
         restored = await asyncio.to_thread(github_state_restore)
         if restored is True:
             RESTORE_FAILED = False
+            RESTORE_ALERT_SENT = False
             seed_safe_bundles()
-            await asyncio.to_thread(github_state_sync)
+            try:
+                await asyncio.to_thread(github_state_sync)
+                await context.bot.send_message(OWNER_ID, "✅ GitHub se purana data restore ho gaya. Bot ka state recover ho chuka hai.")
+            except Exception as exc:
+                RESTORE_FAILED = True
+                RESTORE_ERROR = str(exc)
+                RESTORE_RETRY_AT = time.time() + SYNC_COOLDOWN_SECONDS
+                await context.bot.send_message(OWNER_ID, f"⚠️ Restore ke baad GitHub sync fail ho gaya.\n\nReason: {RESTORE_ERROR}\n\n1 ghante baad dobara try hoga.")
+        else:
+            RESTORE_RETRY_AT = time.time() + SYNC_COOLDOWN_SECONDS
+            try: await context.bot.send_message(OWNER_ID, f"⚠️ GitHub se purana data restore nahi ho saka.\n\nReason: {RESTORE_ERROR}\n\nBot online hai, lekin remote state overwrite nahi ki jayegi. 1 ghante baad dobara restore try hoga.")
+            except Exception: pass
         return
     if time.time() < SYNC_PAUSED_UNTIL:
         if LAST_SYNC_ERROR and not SYNC_FAILURE_NOTIFIED:
@@ -242,7 +264,7 @@ async def save_state_now():
     if RESTORE_FAILED:
         log.warning("Skipping state write while GitHub restore is unavailable; remote state is protected.")
         return
-    if GITHUB_TOKEN and GITHUB_CONFIG.get("repo"):
+    if GITHUB_TOKEN and (GITHUB_CONFIG.get("repo") or os.getenv("GITHUB_REPO", "").strip()):
         try: await asyncio.to_thread(github_state_sync)
         except Exception as exc:
             LAST_SYNC_ERROR = str(exc)
@@ -970,12 +992,17 @@ async def description_handler(update, context):
 
 async def on_error(update, context): log.exception("Unhandled error", exc_info=context.error)
 
+async def notify_restore_failure(context):
+    await context.bot.send_message(OWNER_ID, f"⚠️ Bot online hai, lekin GitHub se purana data restore nahi ho saka.\n\nReason: {RESTORE_ERROR}\n\nRemote data protect hai; koi overwrite nahi hoga. 1 ghante baad dobara restore try hoga.")
+
 def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
     if not str(GITHUB_CONFIG.get("repo", "")).strip() or not GITHUB_TOKEN:
-        raise RuntimeError("github.repo aur GITHUB_TOKEN environment variable required hain.")
-    global RESTORE_FAILED
-    init_db(); restore_status = github_state_restore(); RESTORE_FAILED = restore_status is False; seed_safe_bundles()
+        log.warning("GitHub restore unavailable at startup; bot will stay online and notify the owner.")
+    global RESTORE_FAILED, RESTORE_RETRY_AT
+    init_db(); restore_status = github_state_restore(); RESTORE_FAILED = restore_status is False
+    if RESTORE_FAILED: RESTORE_RETRY_AT = time.time() + SYNC_COOLDOWN_SECONDS
+    seed_safe_bundles()
     if GITHUB_TOKEN and GITHUB_CONFIG.get("repo") and restore_status is not False:
         try: github_state_sync()
         except Exception as exc: log.warning("Initial GitHub state sync failed: %s", exc)
@@ -983,6 +1010,8 @@ def main():
         log.error("Skipping initial GitHub state sync because restore failed; remote state is protected from overwrite.")
     app=Application.builder().token(BOT_TOKEN).build()
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
+    if RESTORE_FAILED:
+        app.job_queue.run_once(notify_restore_failure, when=1)
     app.job_queue.run_once(notify_catalog, when=5)
     app.add_handler(TypeHandler(Update, global_membership_guard), group=-1)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
