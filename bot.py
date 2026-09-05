@@ -139,6 +139,7 @@ RESTORE_FAILED = False
 RESTORE_ERROR = ""
 RESTORE_RETRY_AT = 0.0
 RESTORE_ALERT_SENT = False
+LEGACY_CATEGORIES = ("SPAM BOTS FILE", "BUG BOT 📱", "NEW BAN BOT 🚩", "HOSTING BOT 🚩")
 
 
 def state_payload():
@@ -319,18 +320,18 @@ def seed_safe_bundles():
             if not c.execute("SELECT 1 FROM files WHERE name=?", (file_name,)).fetchone():
                 c.execute("INSERT INTO files(category_id,name,file_id,file_type,required_refs,description,created_by) VALUES(?,?,?,?,?,?,?)", (category_id, file_name, url, "url", refs, description, OWNER_ID))
                 added.append(file_name)
+        # These category names were visible in the user's previous bot UI, but
+        # are absent from every available GitHub snapshot. Recreate the buttons
+        # without inventing file records; files can be uploaded into them again.
+        for category_name in LEGACY_CATEGORIES:
+            c.execute("INSERT OR IGNORE INTO categories(name, created_by) VALUES(?, ?)", (category_name, OWNER_ID))
         c.commit()
     NEW_CATALOG_ITEMS = added
     return added
 
 async def notify_catalog(context):
-    if NEW_CATALOG_ITEMS:
-        message = "New safe tool bundles owner ne add kiye hain:\n\n" + "\n".join(f"• {name}" for name in NEW_CATALOG_ITEMS) + "\n\nCategories mein available hain. Download ke liye referral points required hain. Sirf authorized/legal use karein."
-        await context.bot.send_message(OWNER_ID, message)
-        with db() as c: users = c.execute("SELECT id FROM users WHERE banned=0 AND id!=?", (OWNER_ID,)).fetchall()
-        for user in users:
-            try: await context.bot.send_message(user["id"], message)
-            except Exception: pass
+    # Catalog seeding is silent. Do not broadcast redeploy/seed messages.
+    return
 
 
 def upsert_user(u):
@@ -995,6 +996,9 @@ async def on_error(update, context): log.exception("Unhandled error", exc_info=c
 async def notify_restore_failure(context):
     await context.bot.send_message(OWNER_ID, f"⚠️ Bot online hai, lekin GitHub se purana data restore nahi ho saka.\n\nReason: {RESTORE_ERROR}\n\nRemote data protect hai; koi overwrite nahi hoga. 1 ghante baad dobara restore try hoga.")
 
+async def notify_restore_success(context):
+    await context.bot.send_message(OWNER_ID, "✅ Bot restart ho gaya hai aur GitHub se backup successfully restore ho gaya hai.")
+
 def main():
     if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN missing. .env file configure karein.")
     if not str(GITHUB_CONFIG.get("repo", "")).strip() or not GITHUB_TOKEN:
@@ -1012,7 +1016,8 @@ def main():
     app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
     if RESTORE_FAILED:
         app.job_queue.run_once(notify_restore_failure, when=1)
-    app.job_queue.run_once(notify_catalog, when=5)
+    elif restore_status is True:
+        app.job_queue.run_once(notify_restore_success, when=1)
     app.add_handler(TypeHandler(Update, global_membership_guard), group=-1)
     app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler(["owner","admin","partner"],commands))
     app.add_handler(CallbackQueryHandler(callback_router))
