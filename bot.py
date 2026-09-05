@@ -194,7 +194,13 @@ def github_state_restore():
     try:
         raw = github_request("GET", api, token)
         data = json.loads(base64.b64decode(raw["content"]).decode())
+        if not isinstance(data, dict) or any(table not in data or not isinstance(data[table], list) for table in STATE_TABLES):
+            raise ValueError("GitHub state snapshot is incomplete; refusing to replace local state")
         with db() as c:
+            # Remote GitHub state is authoritative. Remove stale local rows
+            # before restoring, otherwise deleted records can reappear later.
+            for table in reversed(STATE_TABLES):
+                c.execute(f"DELETE FROM {table}")
             for table in STATE_TABLES:
                 rows = data.get(table, [])
                 if not rows: continue
@@ -701,6 +707,7 @@ async def text_handler(update, context):
         await update.message.reply_text("Ab is file ke required referral points ka number bhejein:"); return
     if state == "submission_newcat" and uid == OWNER_ID:
         with db() as c: c.execute("INSERT OR IGNORE INTO categories(name,created_by) VALUES(?,?)", (text,uid)); cid=c.execute("SELECT id FROM categories WHERE name=?", (text,)).fetchone()[0]; c.commit()
+        await save_state_now()
         context.user_data["submission_category"] = cid; context.user_data["state"] = "submission_refs"; await update.message.reply_text("Category ban gayi. Required referral points ka number bhejein:"); return
     if state == "submission_refs" and uid == OWNER_ID:
         try: refs=int(text); assert refs>=0
