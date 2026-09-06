@@ -302,11 +302,14 @@ def github_event_snapshot():
     api=f"https://api.github.com/repos/{repo}/contents/{path}"
     github_request("PUT",api,GITHUB_TOKEN,{"message":"Record state event","content":base64.b64encode(raw).decode()})
     return True
+SNAPSHOT_TASK = None
 async def save_state_now():
+    global SNAPSHOT_TASK
     try:
         LOCAL_STATE_PATH.write_text(json.dumps(state_payload(),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
         if GITHUB_TOKEN and (GITHUB_CONFIG.get("repo") or os.getenv("GITHUB_REPO","").strip()):
-            await asyncio.to_thread(github_event_snapshot)
+            if SNAPSHOT_TASK is None or SNAPSHOT_TASK.done():
+                SNAPSHOT_TASK=asyncio.create_task(asyncio.to_thread(github_event_snapshot))
     except Exception as exc: log.warning("Immediate state snapshot failed: %s",exc)
 def init_db():
     with db() as c:
@@ -464,7 +467,11 @@ def gate_keyboard():
     rows.append([button("Verify Membership", verify_style, callback_data="verify_gate")])
     return InlineKeyboardMarkup(rows)
 
+GATE_CACHE = {}
+
 async def check_gate(bot, uid: int):
+    cached = GATE_CACHE.get(uid)
+    if cached and time.time() - cached[0] < 30: return cached[1]
     required_chats = list(CHANNELS) + list(GROUPS)
     if not required_chats: return True, None
     async def check_one(chat):
@@ -489,8 +496,9 @@ async def check_gate(bot, uid: int):
             return False, display_name
     results = await asyncio.gather(*(check_one(chat) for chat in required_chats))
     for passed, failed_name in results:
-        if not passed: return False, failed_name
-    return True, None
+        if not passed:
+            result=(False, failed_name); GATE_CACHE[uid]=(time.time(), result); return result
+    result=(True, None); GATE_CACHE[uid]=(time.time(), result); return result
 
 
 async def global_membership_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
