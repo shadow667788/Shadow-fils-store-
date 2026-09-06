@@ -191,7 +191,13 @@ def github_state_restore():
     if not token or not repo:
         RESTORE_ERROR = "GITHUB_TOKEN/GITHUB_PAT is missing" if not token else "GitHub repository is not configured"
         return False
-    api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
+    source_file=state_file
+    try:
+        listing=github_request("GET",f"https://api.github.com/repos/{repo}/contents/events",token)
+        names=[x.get("name","") for x in listing if x.get("name","").endswith(".json")]
+        if names: source_file="events/"+max(names)
+    except Exception: pass
+    api = f"https://api.github.com/repos/{repo}/contents/{source_file}"
     try:
         raw = github_request("GET", api, token)
         data = json.loads(base64.b64decode(raw["content"]).decode())
@@ -267,9 +273,24 @@ async def periodic_state_sync(context):
         SYNC_FAILURE_NOTIFIED = False
 
 
+def github_event_snapshot():
+    if not GITHUB_TOKEN: raise RuntimeError("GITHUB_TOKEN is missing")
+    repo=str(GITHUB_CONFIG.get("repo","")).strip() or os.getenv("GITHUB_REPO","").strip()
+    if not repo: raise RuntimeError("GitHub repository is missing")
+    raw=json.dumps(state_payload(),ensure_ascii=False,separators=(",",":")).encode()
+    LOCAL_STATE_PATH.write_bytes(raw)
+    stamp=time.strftime("%Y%m%d-%H%M%S",time.gmtime())
+    digest=hashlib.sha256(raw+str(time.time_ns()).encode()).hexdigest()[:16]
+    path=f"events/state-{stamp}-{digest}.json"
+    api=f"https://api.github.com/repos/{repo}/contents/{path}"
+    github_request("PUT",api,GITHUB_TOKEN,{"message":"Record state event","content":base64.b64encode(raw).decode()})
+    return True
 async def save_state_now():
-    try: LOCAL_STATE_PATH.write_text(json.dumps(state_payload(), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    except Exception as exc: log.warning("Local JSON state write failed: %s", exc)
+    try:
+        LOCAL_STATE_PATH.write_text(json.dumps(state_payload(),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
+        if GITHUB_TOKEN and (GITHUB_CONFIG.get("repo") or os.getenv("GITHUB_REPO","").strip()):
+            await asyncio.to_thread(github_event_snapshot)
+    except Exception as exc: log.warning("Immediate state snapshot failed: %s",exc)
 def init_db():
     with db() as c:
         c.executescript("""
