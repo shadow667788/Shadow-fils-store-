@@ -1,6 +1,8 @@
 import logging
 import json
 import base64
+import gzip
+import hashlib
 import asyncio
 import time
 import os
@@ -130,6 +132,9 @@ def db():
 
 
 STATE_TABLES = ("users", "roles", "categories", "files", "purchases", "referrals", "file_submissions")
+LOCAL_STATE_PATH = Path(__file__).with_name("state.json")
+STATE_FILE = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip() or "bot_state.json"
+SYNC_INTERVAL_SECONDS = 3600
 LAST_SYNC_ERROR = None
 SYNC_PAUSED_UNTIL = 0.0
 SYNC_FAILURE_NOTIFIED = False
@@ -160,28 +165,24 @@ def github_request(method, url, token, data=None):
 
 def github_state_sync():
     with STATE_SYNC_LOCK:
-        token = GITHUB_TOKEN
+        if not GITHUB_TOKEN: raise RuntimeError("GITHUB_TOKEN is missing")
         repo = str(GITHUB_CONFIG.get("repo", "")).strip() or os.getenv("GITHUB_REPO", "").strip()
-        state_file = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip()
-        if not token or not repo: return
-        api = f"https://api.github.com/repos/{repo}/contents/{state_file}"
+        if not repo: raise RuntimeError("GitHub repository is missing")
         payload = state_payload()
-        payload["_meta"] = {"schema": 1, "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-        encoded = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
-        for attempt in range(2):
-            current = None
-            try: current = github_request("GET", api, token)
-            except urllib.error.HTTPError as exc:
-                if exc.code != 404: raise
-            body = {"message": "Update bot state", "content": encoded}
-            if current and current.get("sha"): body["sha"] = current["sha"]
-            try:
-                github_request("PUT", api, token, body)
-                return
-            except urllib.error.HTTPError as exc:
-                if exc.code not in {409, 422} or attempt == 1: raise
-
-
+        payload["_meta"] = {"schema": 2, "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        LOCAL_STATE_PATH.write_bytes(raw)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        digest = hashlib.sha256(raw).hexdigest()[:12]
+        archive = f"archives/state-{stamp}-{digest}.json.gz"
+        api = f"https://api.github.com/repos/{repo}/contents/{archive}"
+        body = {"message": "Archive state snapshot", "content": base64.b64encode(gzip.compress(raw, 9)).decode()}
+        github_request("PUT", api, GITHUB_TOKEN, body)
+        latest = str(GITHUB_CONFIG.get("state_file", "bot_state.json")).strip() or "bot_state.json"
+        api = f"https://api.github.com/repos/{repo}/contents/{latest}"
+        current = github_request("GET", api, GITHUB_TOKEN)
+        github_request("PUT", api, GITHUB_TOKEN, {"message": "Update latest state snapshot", "content": base64.b64encode(raw).decode(), "sha": current.get("sha")})
+        return True
 def github_state_restore():
     global RESTORE_ERROR
     token = GITHUB_TOKEN
@@ -267,19 +268,8 @@ async def periodic_state_sync(context):
 
 
 async def save_state_now():
-    global LAST_SYNC_ERROR, SYNC_PAUSED_UNTIL, SYNC_FAILURE_NOTIFIED
-    if RESTORE_FAILED:
-        log.warning("Skipping state write while GitHub restore is unavailable; remote state is protected.")
-        return
-    if GITHUB_TOKEN and (GITHUB_CONFIG.get("repo") or os.getenv("GITHUB_REPO", "").strip()):
-        try: await asyncio.to_thread(github_state_sync)
-        except Exception as exc:
-            LAST_SYNC_ERROR = str(exc)
-            SYNC_PAUSED_UNTIL = time.time() + SYNC_COOLDOWN_SECONDS
-            SYNC_FAILURE_NOTIFIED = False
-            log.warning("Immediate GitHub state sync failed; cooldown enabled: %s", exc)
-
-
+    try: LOCAL_STATE_PATH.write_text(json.dumps(state_payload(), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    except Exception as exc: log.warning("Local JSON state write failed: %s", exc)
 def init_db():
     with db() as c:
         c.executescript("""
@@ -1014,13 +1004,9 @@ def main():
     init_db(); restore_status = github_state_restore(); RESTORE_FAILED = restore_status is False
     if RESTORE_FAILED: RESTORE_RETRY_AT = time.time() + SYNC_COOLDOWN_SECONDS
     seed_safe_bundles()
-    if GITHUB_TOKEN and GITHUB_CONFIG.get("repo") and restore_status is not False:
-        try: github_state_sync()
-        except Exception as exc: log.warning("Initial GitHub state sync failed: %s", exc)
-    elif restore_status is False:
-        log.error("Skipping initial GitHub state sync because restore failed; remote state is protected from overwrite.")
+    log.info("Initial startup sync skipped; hourly checkpoint will upload state.")
     app=Application.builder().token(BOT_TOKEN).build()
-    app.job_queue.run_repeating(periodic_state_sync, interval=30, first=30)
+    app.job_queue.run_repeating(periodic_state_sync, interval=SYNC_INTERVAL_SECONDS, first=SYNC_INTERVAL_SECONDS)
     if RESTORE_FAILED:
         app.job_queue.run_once(notify_restore_failure, when=1)
     elif restore_status is True:
