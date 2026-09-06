@@ -163,11 +163,28 @@ def github_request(method, url, token, data=None):
         return json.loads(response.read().decode())
 
 
+def sync_split_files():
+    repo=str(GITHUB_CONFIG.get('repo','')).strip() or os.getenv('GITHUB_REPO','').strip()
+    with db() as c:
+        datasets=[('users','id'),('categories','id'),('files','id')]
+        for table,key in datasets:
+            rows=[dict(r) for r in c.execute(f'SELECT * FROM {table}').fetchall()]
+            for row in rows:
+                ident=int(row[key]); payload={'table':table,'record':row,'saved_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
+                path=f'{table}/{ident}.json'; api=f'https://api.github.com/repos/{repo}/contents/{path}'
+                current=None
+                try: current=github_request('GET',api,GITHUB_TOKEN)
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404: raise
+                body={'message':f'Update {table} {ident}','content':base64.b64encode(json.dumps(payload,ensure_ascii=False).encode()).decode()}
+                if current and current.get('sha'): body['sha']=current['sha']
+                github_request('PUT',api,GITHUB_TOKEN,body)
 def github_state_sync():
     with STATE_SYNC_LOCK:
         if not GITHUB_TOKEN: raise RuntimeError("GITHUB_TOKEN is missing")
         repo = str(GITHUB_CONFIG.get("repo", "")).strip() or os.getenv("GITHUB_REPO", "").strip()
         if not repo: raise RuntimeError("GitHub repository is missing")
+        sync_split_files()
         payload = state_payload()
         payload["_meta"] = {"schema": 2, "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
@@ -269,7 +286,7 @@ async def periodic_state_sync(context):
         reason = str(exc)
         log.warning("GitHub state sync failed: %s", reason)
         LAST_SYNC_ERROR = reason
-        SYNC_PAUSED_UNTIL = time.time() + SYNC_COOLDOWN_SECONDS
+        SYNC_PAUSED_UNTIL = time.time() + SYNC_INTERVAL_SECONDS
         SYNC_FAILURE_NOTIFIED = False
 
 
